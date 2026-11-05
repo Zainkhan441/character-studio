@@ -76,19 +76,26 @@ describe("renderer determinism", () => {
   it("output contains the hand filter and grain overlay", () => {
     const svg = renderCharacterSvg(defaultCharacter());
     expect(svg).toContain('id="hand"');
-    // Python pixel-space values converted to character-unit space
+    // Pixel-space values converted to character-unit space
     // (720 px / 9 viewBox units = 80 px/unit): hand turbulence
-    // 0.025/px -> 2.0/unit, grain 0.9/px -> 72.0/unit.
-    expect(svg).toContain('feTurbulence type="fractalNoise" baseFrequency="2.000"');
+    // 0.018/px -> 1.44/unit (M1: coarser = reads hand-drawn, not noise),
+    // grain 0.9/px -> 72.0/unit.
+    expect(svg).toContain('feTurbulence type="fractalNoise" baseFrequency="1.440"');
     expect(svg).toContain('feTurbulence type="fractalNoise" baseFrequency="72.0"');
     expect(svg).toContain('feDisplacementMap');
     expect(svg).toContain('id="grain"');
     expect(svg).toContain('filter="url(#hand)"');
   });
 
-  it("default wobble 1 gives the engine displacement scale (1.8px / 80px-per-unit = 0.0225)", () => {
+  it("default wobble 1 gives the M1 displacement scale (4.0px / 80px-per-unit = 0.05)", () => {
     const svg = renderCharacterSvg(defaultCharacter());
-    expect(svg).toContain('scale="0.0225"');
+    expect(svg).toContain('scale="0.0500"');
+  });
+
+  it("wobble 3 is 3x the wobble 1 scale, so 0 vs 3 is obvious", () => {
+    const base = defaultCharacter();
+    const svg = renderCharacterSvg({ ...base, style: { ...base.style, wobble: 3 } });
+    expect(svg).toContain('scale="0.1500"');
   });
 
   it("wobble 0 produces a displacement scale of 0.0", () => {
@@ -186,7 +193,7 @@ describe("character validation", () => {
     if (result.ok) {
       expect(result.character.name).toBe("Asha");
       expect(result.character.pose).toBe("think");
-      expect(result.character.hair.style).toBe("ragged");
+      expect(result.character.hair.style).toBe("short");
     }
   });
 });

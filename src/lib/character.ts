@@ -76,7 +76,13 @@ export const POSES: Record<PoseName, PoseDef> = {
   think: pose(0, [8, 100], [40, 155], [-5, 0], [5, 0], "feet", false),
   point: pose(0, [-8, 6], [92, 0], [-5, 0], [6, 0], "feet", false),
   wave: pose(0, [-8, 6], [115, 45], [-5, 0], [5, 0], "feet", false),
-  cheer: pose(0, [-155, -15], [155, 15], [-12, 0], [12, 0], "feet", false),
+  // Cheer (fixed 2026-11-05, M1): the original angles [155,15]/[-155,-15]
+  // drove both elbows THROUGH the head circle (elbow ~0.54 from head
+  // centre, head radius 1) — the front arm speared across the face.
+  // [115,30]/[-115,-30] puts both elbows ~1.16 from the head centre
+  // with hands high at (+/-1.60,-2.88). Verified by the pose-matrix
+  // test (no arm segment may pass within 0.5 of the head centre).
+  cheer: pose(0, [-115, -30], [115, 30], [-12, 0], [12, 0], "feet", false),
   shrug: pose(0, [-55, 120], [55, -120], [-5, 0], [5, 0], "feet", false),
   hold: pose(0, [-8, 6], [25, 55], [-5, 0], [5, 0], "feet", false),
   hold_up: pose(0, [-8, 6], [40, 95], [-5, 0], [5, 0], "feet", false),
@@ -287,12 +293,19 @@ const limbAnglesSchema = z.tuple([z.number(), z.number()]);
 export const ProportionsSchema = z.object({
   /** Head radius in character units (ink.py: 1). */
   headRadius: z.number().min(0.5).max(2).default(1),
-  /** Hip-to-neck length (ink.py TORSO = 1.85). */
-  torso: z.number().min(1).max(3).default(1.85),
-  upperArm: z.number().min(0.5).max(2).default(1.1),
-  lowerArm: z.number().min(0.5).max(2).default(1.05),
-  upperLeg: z.number().min(0.5).max(2).default(1.22),
-  lowerLeg: z.number().min(0.5).max(2).default(1.18),
+  /**
+   * Hip-to-neck length. Rescaled 2026-11-05 (M1) from the engine's
+   * 1.85 to 1.3 per the measured YouTube style guide: the reference
+   * head is 39% of total standing height (head diameter 2.0 / total
+   * ~5.2), torso ≈ 1.1–1.3 head radii, legs ≈ 1.9 radii. The whole
+   * body (arms + legs) is scaled with it so limbs still hang to
+   * mid-thigh. R1 in the style guide.
+   */
+  torso: z.number().min(0.8).max(3).default(1.3),
+  upperArm: z.number().min(0.5).max(2).default(0.8),
+  lowerArm: z.number().min(0.5).max(2).default(0.75),
+  upperLeg: z.number().min(0.5).max(2).default(0.95),
+  lowerLeg: z.number().min(0.5).max(2).default(0.9),
 });
 
 export const FaceSchema = z.object({
@@ -313,23 +326,71 @@ export const FaceSchema = z.object({
 });
 
 export const HairSchema = z.object({
-  style: z.enum(HAIR_STYLES).default("ragged"),
+  style: z.enum(HAIR_STYLES).default("short"),
   color: z.enum(["brown", "black", "blond", "grey", "red"] as const).default("brown"),
   /** Beard on/off + style (ink.py beard_svg). */
   beard: z.enum(["none", "full", "long"] as const).default("none"),
 });
 
 export const OutfitSchema = z.object({
-  outfit: z.enum(OUTFIT_NAMES).default("caveman"),
+  outfit: z.enum(OUTFIT_NAMES).default("shirt"),
   /** Fur colour for caveman / cavedress. */
   furColor: hexColor.default("#8b5a33"),
   shoes: z.boolean().default(true),
   furBoots: z.boolean().default(false),
+  /** Shoe colour override (null = the outfit's own shoes). */
+  shoeColor: hexColor.nullable().default(null),
+  /** Legs override for the wardrobe (null = the outfit's own legs). */
+  legsOverride: z.enum(["long", "shorts"] as const).nullable().default(null),
+  /** Neck accessory (scarf draws over the garment, under the head). */
+  accessory: z.enum(["none", "scarf"] as const).default("none"),
+  accessoryColor: hexColor.default("#c0392b"),
   hat: z.enum(HAT_NAMES).default("none"),
   hold: z.enum(PROP_NAMES).default("none"),
   holdHand: z.enum(["front", "back"] as const).default("front"),
   holdAngle: z.number().default(0),
 });
+
+/* ------------------------------------------------------------------ */
+/* Era packs — one-click wardrobe presets for the creator page.        */
+/* A pack patches the outfit + hat + hair style, nothing else.         */
+/* ------------------------------------------------------------------ */
+
+export interface EraPack {
+  id: string;
+  name: string;
+  description: string;
+  outfit: OutfitName;
+  hat: HatName;
+  hairStyle: HairStyle;
+}
+
+export const ERA_PACKS: EraPack[] = [
+  {
+    id: "modern",
+    name: "Modern",
+    description: "T-shirt, jeans, short hair — today's creator.",
+    outfit: "shirt",
+    hat: "none",
+    hairStyle: "short",
+  },
+  {
+    id: "medieval",
+    name: "Medieval",
+    description: "Tunic, long hair — knights, castles, quests.",
+    outfit: "medieval",
+    hat: "none",
+    hairStyle: "long",
+  },
+  {
+    id: "stone-age",
+    name: "Stone Age",
+    description: "Fur, ragged hair — the original Ink Explainer look.",
+    outfit: "caveman",
+    hat: "none",
+    hairStyle: "ragged",
+  },
+];
 
 export const StyleSchema = z.object({
   /** Ink colour for outlines. */
@@ -339,15 +400,18 @@ export const StyleSchema = z.object({
   /** Outline width (ink.py OW = 0.075). */
   outlineWidth: z.number().min(0.02).max(0.2).default(0.075),
   /**
-   * Hand-drawn wobble multiplier. 1 = the Python engine's default
-   * (ink.py scene wobble 1.0 => 1.8 px displacement at 1080p).
-   * 0 = perfectly straight lines. The renderer converts this to a
-   * feDisplacementMap scale in character units (0.0225 * wobble).
+   * Hand-drawn wobble multiplier. 0 = perfectly straight lines.
+   * The renderer converts this to a feDisplacementMap scale in
+   * character units (0.05 * wobble at the default framing).
    */
   wobble: z.number().min(0).max(5).default(1),
-  /** Skin fill of the head circle. */
-  skinFill: hexColor.default("#ffffff"),
-  skinShade: hexColor.default("#e9e4dc"),
+  /**
+   * Skin fill of the head — a per-character setting, not a global
+   * constant (style guide R8, measured): white for night scenes,
+   * tan for day scenes, silhouette for distant/scale shots. The
+   * renderer maps it to fill + shade + face-ink colours.
+   */
+  skin: z.enum(["white", "tan", "silhouette"] as const).default("white"),
   /** Seeded RNG seed — same seed + same character = same SVG. */
   seed: z.number().int().min(0).max(100000).default(7),
 });
@@ -376,7 +440,7 @@ export const CharacterSchema = z.object({
 export type Character = z.output<typeof CharacterSchema>;
 export type CharacterInput = z.input<typeof CharacterSchema>;
 
-/** A ready-to-render default character (caveman, ragged hair, stand). */
+/** A ready-to-render default character (modern-casual: shirt, short hair, stand). */
 export function defaultCharacter(): Character {
   const parsed = CharacterSchema.safeParse({});
   if (!parsed.success) {

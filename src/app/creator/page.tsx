@@ -7,6 +7,20 @@
  * reference Python engine) + side controls. Autosaves to localStorage
  * on every change, so closing the browser never loses work.
  *
+ * M1 features:
+ * - Canvas fills the viewport (100dvh minus header); the auto-fit
+ *   viewBox is snug (~10% padding) so the character fills ~70%+ of
+ *   the preview instead of ~30%.
+ * - Undo/redo (Ctrl+Z / Ctrl+Shift+Z) via a capped History stack.
+ * - Visual pose editor: drag the blue dots on the canvas to move
+ *   arms and legs (two-bone IK); release to commit; save as a named
+ *   custom pose and reuse it forever.
+ * - Wardrobe slots (headwear / top / bottom / footwear / accessory /
+ *   prop) + one-click era packs (Modern / Medieval / Stone Age).
+ * - Family generator: one click creates a female / child / elder
+ *   variant and adds it to the cast.
+ * - Save to cast; open a cast member via ?cast=<id>.
+ *
  * Quality notes:
  * - Render is synchronous and measured on every change; the time is
  *   shown live against the <16ms preview budget.
@@ -19,16 +33,19 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import {
   CREATOR_EXPRESSIONS,
   CREATOR_POSES,
+  ERA_PACKS,
   FACE_NAMES,
   HAIR_COLORS,
   HAIR_STYLES,
   HAT_NAMES,
   OUTFIT_NAMES,
+  POSES,
   POSE_NAMES,
   PROP_NAMES,
   defaultCharacter,
   validateCharacter,
   type Character,
+  type EraPack,
   type FaceName,
   type HairColorName,
   type HairStyle,
@@ -37,9 +54,27 @@ import {
   type PoseName,
   type PropName,
 } from "@/lib/character";
-import { renderCharacterTimed } from "@/lib/renderer";
+import { loadCast, saveCast, upsertCast } from "@/lib/cast";
+import {
+  loadCustomPoses,
+  removeCustomPose,
+  saveCustomPoses,
+  upsertCustomPose,
+  type CustomPose,
+} from "@/lib/custom-poses";
+import { makeFamilyVariant, type FamilyKind } from "@/lib/family";
+import { History } from "@/lib/history";
+import { measureCharacterViewBox } from "@/lib/fit-viewbox";
+import {
+  characterJoints,
+  computeSkeleton,
+  jointsToCharacterSpace,
+  limbAnglesForPoint,
+  renderCharacterTimed,
+} from "@/lib/renderer";
 
 const STORAGE_KEY = "character-studio:creator:character:v1";
+const DEFAULT_VIEWBOX = "-4.5 -9.5 9 10.5";
 
 const PREVIEW_BG_LIGHT = "#f5f3ef";
 const PREVIEW_BG_DARK = "#171412";
@@ -63,6 +98,8 @@ function loadSavedCharacter(): { character: Character; notice: string | null } {
   }
 }
 
+type DragLimb = "frontArm" | "backArm" | "frontLeg" | "backLeg";
+
 export default function CreatorPage() {
   const [mounted, setMounted] = useState(false);
   const [character, setCharacter] = useState<Character>(() => defaultCharacter());
@@ -70,15 +107,53 @@ export default function CreatorPage() {
   const [renderError, setRenderError] = useState<string | null>(null);
   const [dark, setDark] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [poseEdit, setPoseEdit] = useState(false);
+  const [dragging, setDragging] = useState(false);
+  const [histState, setHistState] = useState({ canUndo: false, canRedo: false });
+  const [customPoses, setCustomPoses] = useState<CustomPose[]>([]);
+  const [poseName, setPoseName] = useState("My pose");
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const historyRef = useRef<History<Character> | null>(null);
+  const characterRef = useRef<Character>(character);
+  const overlayRef = useRef<SVGSVGElement | null>(null);
+  const dragRef = useRef<{
+    limb: DragLimb;
+    startChar: Character;
+  } | null>(null);
+
+  const refreshHistState = useCallback(() => {
+    const h = historyRef.current;
+    setHistState({ canUndo: h?.canUndo ?? false, canRedo: h?.canRedo ?? false });
+  }, []);
 
   // Load once on mount (client-only: localStorage does not exist on server).
+  // ?cast=<id> opens a cast member instead of the saved character.
   useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const castId = params.get("cast");
+    if (castId) {
+      const { cast } = loadCast();
+      const found = cast.find((c) => c.id === castId);
+      if (found) {
+        setCharacter(found);
+        characterRef.current = found;
+        historyRef.current = new History<Character>(found);
+        setNotice(`Loaded ${found.name} from your cast.`);
+        setMounted(true);
+        refreshHistState();
+        return;
+      }
+      setNotice("That cast member was not found — opened your saved character.");
+    }
     const { character: saved, notice: loadNotice } = loadSavedCharacter();
     setCharacter(saved);
+    characterRef.current = saved;
+    historyRef.current = new History<Character>(saved);
     if (loadNotice) setNotice(loadNotice);
+    setCustomPoses(loadCustomPoses().poses);
     setMounted(true);
-  }, []);
+    refreshHistState();
+  }, [refreshHistState]);
 
   // Autosave (debounced 300ms) on every change after mount.
   useEffect(() => {
@@ -98,30 +173,136 @@ export default function CreatorPage() {
     };
   }, [character, mounted]);
 
-  const update = useCallback((patch: Partial<Character>) => {
-    setCharacter((prev) => ({ ...prev, ...patch }));
+  /** Record a discrete change in history and apply it. */
+  const commit = useCallback(
+    (next: Character) => {
+      historyRef.current?.push(next);
+      characterRef.current = next;
+      setCharacter(next);
+      setRenderError(null);
+      refreshHistState();
+    },
+    [refreshHistState],
+  );
+
+  /** Apply a live change (slider drag, pose-editor drag, typing) without a history entry. */
+  const setLive = useCallback((next: Character) => {
+    characterRef.current = next;
+    setCharacter(next);
     setRenderError(null);
   }, []);
 
-  const updateFace = useCallback((patch: Partial<Character["face"]>) => {
-    setCharacter((prev) => ({ ...prev, face: { ...prev.face, ...patch } }));
-    setRenderError(null);
-  }, []);
+  /** Push the current (live-edited) state into history — call on release/blur. */
+  const commitCurrent = useCallback(() => {
+    historyRef.current?.push(characterRef.current);
+    refreshHistState();
+  }, [refreshHistState]);
 
-  const updateHair = useCallback((patch: Partial<Character["hair"]>) => {
-    setCharacter((prev) => ({ ...prev, hair: { ...prev.hair, ...patch } }));
-    setRenderError(null);
-  }, []);
+  const undo = useCallback(() => {
+    const prev = historyRef.current?.undo();
+    if (prev !== null && prev !== undefined) {
+      characterRef.current = prev;
+      setCharacter(prev);
+      refreshHistState();
+    }
+  }, [refreshHistState]);
 
-  const updateOutfit = useCallback((patch: Partial<Character["outfit"]>) => {
-    setCharacter((prev) => ({ ...prev, outfit: { ...prev.outfit, ...patch } }));
-    setRenderError(null);
-  }, []);
+  const redo = useCallback(() => {
+    const next = historyRef.current?.redo();
+    if (next !== null && next !== undefined) {
+      characterRef.current = next;
+      setCharacter(next);
+      refreshHistState();
+    }
+  }, [refreshHistState]);
 
-  const updateStyle = useCallback((patch: Partial<Character["style"]>) => {
-    setCharacter((prev) => ({ ...prev, style: { ...prev.style, ...patch } }));
-    setRenderError(null);
-  }, []);
+  // Keyboard shortcuts: Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z / Ctrl/Cmd+Y redo, Esc exits the pose editor.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const target = e.target as HTMLElement | null;
+      const tag = target?.tagName ?? "";
+      const inField = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT" || target?.isContentEditable;
+      if (e.key === "Escape" && poseEdit) {
+        setPoseEdit(false);
+        return;
+      }
+      if ((e.ctrlKey || e.metaKey) && !inField) {
+        if ((e.key === "z" || e.key === "Z") && !e.shiftKey) {
+          e.preventDefault();
+          undo();
+        } else if ((e.key === "Z" && e.shiftKey) || e.key === "y" || e.key === "Y") {
+          e.preventDefault();
+          redo();
+        }
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [undo, redo, poseEdit]);
+
+  const update = useCallback(
+    (patch: Partial<Character>) => {
+      commit({ ...characterRef.current, ...patch });
+    },
+    [commit],
+  );
+
+  const updateLive = useCallback(
+    (patch: Partial<Character>) => {
+      setLive({ ...characterRef.current, ...patch });
+    },
+    [setLive],
+  );
+
+  const updateFace = useCallback(
+    (patch: Partial<Character["face"]>) => {
+      const c = characterRef.current;
+      commit({ ...c, face: { ...c.face, ...patch } });
+    },
+    [commit],
+  );
+
+  const updateFaceLive = useCallback(
+    (patch: Partial<Character["face"]>) => {
+      const c = characterRef.current;
+      setLive({ ...c, face: { ...c.face, ...patch } });
+    },
+    [setLive],
+  );
+
+  const updateHair = useCallback(
+    (patch: Partial<Character["hair"]>) => {
+      const c = characterRef.current;
+      commit({ ...c, hair: { ...c.hair, ...patch } });
+    },
+    [commit],
+  );
+
+  const updateOutfit = useCallback(
+    (patch: Partial<Character["outfit"]>) => {
+      const c = characterRef.current;
+      commit({ ...c, outfit: { ...c.outfit, ...patch } });
+    },
+    [commit],
+  );
+
+  const updateStyleLive = useCallback(
+    (patch: Partial<Character["style"]>) => {
+      const c = characterRef.current;
+      setLive({ ...c, style: { ...c.style, ...patch } });
+    },
+    [setLive],
+  );
+
+  const setPose = useCallback(
+    (pose: PoseName) => {
+      // Switching pose clears limb overrides — a dragged arm from
+      // "stand" must not leak into "wave".
+      const c = characterRef.current;
+      commit({ ...c, pose, backArm: null, frontArm: null, backLeg: null, frontLeg: null });
+    },
+    [commit],
+  );
 
   const render = useMemo(() => {
     if (!mounted) return { svg: "", ms: 0 };
@@ -138,38 +319,155 @@ export default function CreatorPage() {
   }, [character, dark, mounted]);
 
   /**
-   * Auto-fit the preview frame. The renderer's default viewBox fits the
-   * character in normal poses, but a long held prop in a raised-hand pose
-   * (cheer + spear: tip at -11.9 units) or a lying character with a prop
-   * extends beyond it. After every render, measure the drawn group's
-   * bounding box and expand the viewBox to fit — never shrink below the
-   * default frame, so ordinary poses keep a stable framing.
+   * Auto-fit the preview frame. Measured from the rendered character
+   * (see measureCharacterViewBox): the frame hugs the figure with
+   * ~0.35 units (~10%) padding, so the character fills ~70%+ of the
+   * preview instead of ~50% of the loose default frame. A minimum
+   * frame (3.2 x 5.4) keeps small characters (child scale) from
+   * zooming in too far. Frozen while a pose-editor drag is in
+   * progress, so the canvas never rescales under the pointer; refits
+   * once the drag ends.
    */
   const previewRef = useRef<HTMLDivElement>(null);
   const [fittedViewBox, setFittedViewBox] = useState<string | null>(null);
   useLayoutEffect(() => {
-    const g = previewRef.current?.querySelector("g[filter]");
-    if (!g || !(g instanceof SVGGraphicsElement)) return;
-    try {
-      const b = g.getBBox();
-      const m = 0.6; // margin in character units
-      const minX = -4.5, minY = -9.5, maxX = 4.5, maxY = 1.0; // default frame
-      const x = Math.min(minX, b.x - m);
-      const y = Math.min(minY, b.y - m);
-      const x2 = Math.max(maxX, b.x + b.width + m);
-      const y2 = Math.max(maxY, b.y + b.height + m);
-      const vb = `${fmt2(x)} ${fmt2(y)} ${fmt2(x2 - x)} ${fmt2(y2 - y)}`;
-      setFittedViewBox((prev) => (prev === vb ? prev : vb));
-    } catch {
-      // getBBox can throw for a not-yet-laid-out element; keep the
-      // default frame — the preview still renders.
-    }
-  }, [render.svg]);
+    if (dragging) return;
+    const el = previewRef.current;
+    if (!el) return;
+    const vb = measureCharacterViewBox(el);
+    if (vb) setFittedViewBox((prev) => (prev === vb ? prev : vb));
+  }, [render.svg, dragging]);
 
   const previewSvg = useMemo(() => {
     if (!render.svg || !fittedViewBox) return render.svg;
     return render.svg.replace(/viewBox="[^"]*"/, `viewBox="${fittedViewBox}"`);
   }, [render.svg, fittedViewBox]);
+
+  // Pose-editor drag handles (SVG user space, same viewBox as the preview).
+  const joints = useMemo(() => {
+    if (!mounted || !poseEdit) return null;
+    try {
+      return characterJoints(character);
+    } catch {
+      return null;
+    }
+  }, [character, mounted, poseEdit]);
+
+  const startDrag = useCallback(
+    (e: React.PointerEvent<SVGCircleElement>, limb: DragLimb) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const startChar = characterRef.current;
+      dragRef.current = { limb, startChar };
+      setDragging(true);
+      (e.target as SVGCircleElement).setPointerCapture(e.pointerId);
+
+      const onMove = (ev: PointerEvent) => {
+        const drag = dragRef.current;
+        const svg = overlayRef.current;
+        if (!drag || !svg) return;
+        const ctm = svg.getScreenCTM();
+        if (!ctm) return;
+        const pt = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(ctm.inverse());
+        const target = jointsToCharacterSpace(drag.startChar, [pt.x, pt.y]);
+        const sk = computeSkeleton(drag.startChar);
+        const c = characterRef.current;
+        let next: Character | null = null;
+        if (drag.limb === "frontArm" || drag.limb === "backArm") {
+          const [a1, a2] = limbAnglesForPoint(sk.shoulder, c.proportions.upperArm, c.proportions.lowerArm, target, -1);
+          next = drag.limb === "frontArm" ? { ...c, frontArm: [a1, a2] } : { ...c, backArm: [a1, a2] };
+        } else {
+          const [a1, a2] = limbAnglesForPoint(sk.hip, c.proportions.upperLeg, c.proportions.lowerLeg, target, 1);
+          next = drag.limb === "frontLeg" ? { ...c, frontLeg: [a1, a2] } : { ...c, backLeg: [a1, a2] };
+        }
+        if (next) setLive(next);
+      };
+      const onUp = () => {
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        dragRef.current = null;
+        setDragging(false);
+        commitCurrent();
+      };
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+    },
+    [commitCurrent, setLive],
+  );
+
+  const resetPose = useCallback(() => {
+    const c = characterRef.current;
+    commit({ ...c, backArm: null, frontArm: null, backLeg: null, frontLeg: null });
+    setNotice("Pose overrides cleared — back to the base pose.");
+  }, [commit]);
+
+  const saveCurrentPose = useCallback(() => {
+    const c = characterRef.current;
+    const pose = POSES[c.pose];
+    const p: CustomPose = {
+      id: `pose-${Date.now()}`,
+      name: poseName.trim() || "My pose",
+      basePose: c.pose,
+      // POSES angles are readonly tuples — copy them into mutable ones.
+      backArm: [...(c.backArm ?? pose.backArm)] as [number, number],
+      frontArm: [...(c.frontArm ?? pose.frontArm)] as [number, number],
+      backLeg: [...(c.backLeg ?? pose.backLeg)] as [number, number],
+      frontLeg: [...(c.frontLeg ?? pose.frontLeg)] as [number, number],
+      createdAt: Date.now(),
+    };
+    const next = upsertCustomPose(customPoses, p);
+    setCustomPoses(next);
+    if (!saveCustomPoses(next)) setNotice(`Pose "${p.name}" saved in this session only — storage unavailable.`);
+    else setNotice(`Pose "${p.name}" saved — reuse it anytime.`);
+  }, [poseName, customPoses]);
+
+  const applyCustomPose = useCallback(
+    (p: CustomPose) => {
+      const c = characterRef.current;
+      commit({ ...c, pose: p.basePose, backArm: p.backArm, frontArm: p.frontArm, backLeg: p.backLeg, frontLeg: p.frontLeg });
+      setNotice(`Applied pose "${p.name}".`);
+    },
+    [commit],
+  );
+
+  const deleteCustomPose = useCallback((id: string) => {
+    setCustomPoses((prev) => {
+      const next = removeCustomPose(prev, id);
+      saveCustomPoses(next);
+      return next;
+    });
+  }, []);
+
+  const applyEraPack = useCallback(
+    (pack: EraPack) => {
+      const c = characterRef.current;
+      commit({
+        ...c,
+        outfit: { ...c.outfit, outfit: pack.outfit, hat: pack.hat },
+        hair: { ...c.hair, style: pack.hairStyle },
+      });
+      setNotice(`Dressed for the ${pack.name} era.`);
+    },
+    [commit],
+  );
+
+  const makeVariant = useCallback(
+    (kind: FamilyKind) => {
+      const v = makeFamilyVariant(characterRef.current, kind);
+      commit(v);
+      const { cast } = loadCast();
+      saveCast(upsertCast(cast, v));
+      setNotice(`${kind === "female" ? "Female" : kind === "child" ? "Child" : "Elder"} variant created and added to your cast.`);
+    },
+    [commit],
+  );
+
+  const saveToCast = useCallback(() => {
+    const c = characterRef.current;
+    const { cast } = loadCast();
+    saveCast(upsertCast(cast, c));
+    setNotice(`${c.name} saved to your cast.`);
+  }, []);
 
   const downloadSvg = useCallback(() => {
     if (!previewSvg) return;
@@ -201,15 +499,9 @@ export default function CreatorPage() {
 
   const reset = useCallback(() => {
     const fresh = defaultCharacter();
-    setCharacter(fresh);
+    commit(fresh);
     setNotice("Reset to the default character.");
-    try {
-      window.localStorage.setItem(STORAGE_KEY, JSON.stringify(fresh));
-    } catch {
-      // Autosave effect will retry; never fail silently to the user.
-      setNotice("Reset done, but autosave could not write — check browser storage.");
-    }
-  }, []);
+  }, [commit]);
 
   if (!mounted) {
     return (
@@ -224,11 +516,21 @@ export default function CreatorPage() {
 
   const overBudget = render.ms >= 16;
   const previewBg = dark ? PREVIEW_BG_DARK : PREVIEW_BG_LIGHT;
+  const overlayViewBox = fittedViewBox ?? DEFAULT_VIEWBOX;
+
+  const handles: Array<{ key: DragLimb; point: readonly [number, number] | null; label: string }> = joints
+    ? [
+        { key: "frontArm", point: joints.frontHand, label: "Front hand — drag to move the front arm" },
+        { key: "backArm", point: joints.backHand, label: "Back hand — drag to move the back arm" },
+        { key: "frontLeg", point: joints.frontFoot, label: "Front foot — drag to move the front leg" },
+        { key: "backLeg", point: joints.backFoot, label: "Back foot — drag to move the back leg" },
+      ]
+    : [];
 
   return (
-    <main className="flex min-h-screen flex-col bg-white text-neutral-900">
+    <main className="flex h-dvh flex-col overflow-hidden bg-white text-neutral-900">
       {/* Top bar */}
-      <header className="flex items-center justify-between border-b border-neutral-200 px-4 py-3 sm:px-6">
+      <header className="flex shrink-0 items-center justify-between gap-2 border-b border-neutral-200 px-4 py-3 sm:px-6">
         <div className="flex items-center gap-3">
           <a href="/" className="text-lg font-bold tracking-tight">
             Character Studio
@@ -236,11 +538,41 @@ export default function CreatorPage() {
           <span className="hidden rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 sm:inline">
             Creator
           </span>
+          <a href="/cast" className="hidden rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-200 sm:inline">
+            Cast →
+          </a>
         </div>
         <div className="flex items-center gap-2">
           <span className="hidden text-xs text-neutral-500 md:inline" title="Autosave status">
             {savedAt ? `Autosaved ${savedAt}` : "Autosave on"}
           </span>
+          <button
+            type="button"
+            onClick={undo}
+            disabled={!histState.canUndo}
+            title="Undo (Ctrl+Z)"
+            className="rounded-md border border-neutral-300 px-2.5 py-1.5 text-sm hover:bg-neutral-100 disabled:opacity-40"
+          >
+            ↩ Undo
+          </button>
+          <button
+            type="button"
+            onClick={redo}
+            disabled={!histState.canRedo}
+            title="Redo (Ctrl+Shift+Z)"
+            className="rounded-md border border-neutral-300 px-2.5 py-1.5 text-sm hover:bg-neutral-100 disabled:opacity-40"
+          >
+            ↪ Redo
+          </button>
+          <button
+            type="button"
+            onClick={() => setPoseEdit((v) => !v)}
+            aria-pressed={poseEdit}
+            title="Drag the blue dots to move arms and legs"
+            className={`rounded-md border px-3 py-1.5 text-sm ${poseEdit ? "border-neutral-900 bg-neutral-900 text-white" : "border-neutral-300 hover:bg-neutral-100"}`}
+          >
+            ✏️ Pose editor
+          </button>
           <button
             type="button"
             onClick={() => setDark((d) => !d)}
@@ -261,7 +593,7 @@ export default function CreatorPage() {
       </header>
 
       {notice && (
-        <div className="flex items-center justify-between border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 sm:px-6">
+        <div className="flex shrink-0 items-center justify-between border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 sm:px-6">
           <span>{notice}</span>
           <button type="button" onClick={() => setNotice(null)} className="font-bold" aria-label="Dismiss notice">
             ×
@@ -269,9 +601,14 @@ export default function CreatorPage() {
         </div>
       )}
 
-      <div className="flex flex-1 flex-col lg:flex-row">
-        {/* Canvas — biggest area */}
-        <section className="flex flex-1 flex-col items-center justify-center p-4 sm:p-8" style={{ background: previewBg }}>
+      <div className="flex min-h-0 flex-1 flex-col lg:flex-row">
+        {/* Canvas — biggest area, fills the viewport */}
+        <section className="relative flex min-h-0 flex-1 flex-col items-center justify-center" style={{ background: previewBg }}>
+          {poseEdit && (
+            <div className="absolute left-1/2 top-3 z-10 -translate-x-1/2 whitespace-nowrap rounded-full bg-neutral-900 px-3 py-1 text-xs text-white shadow">
+              Drag the blue dots to move arms and legs · Esc to exit
+            </div>
+          )}
           {renderError ? (
             <div className="max-w-md rounded-lg border border-red-300 bg-red-50 p-6 text-center" role="alert">
               <p className="font-semibold text-red-800">Couldn’t render this character</p>
@@ -285,32 +622,61 @@ export default function CreatorPage() {
               </button>
             </div>
           ) : render.svg ? (
-            <>
+            <div className="relative h-full w-full">
               <div
                 ref={previewRef}
-                className="w-full max-w-2xl"
+                className="absolute inset-0 [&_svg]:h-full [&_svg]:w-full"
                 dangerouslySetInnerHTML={{ __html: previewSvg }}
               />
-              <p className={`mt-4 text-xs ${overBudget ? "font-semibold text-red-600" : "text-neutral-500"}`}>
-                Rendered in {render.ms.toFixed(2)} ms (budget &lt; 16 ms)
-                {overBudget ? " — over budget, investigate before shipping" : ""}
-                {" · "}Pose: {character.pose} · {character.face.expression}
-              </p>
-            </>
+              {poseEdit && joints && (
+                <svg
+                  ref={overlayRef}
+                  viewBox={overlayViewBox}
+                  className="pointer-events-none absolute inset-0 h-full w-full"
+                  aria-label="Pose editor handles"
+                >
+                  {handles.map(
+                    (h) =>
+                      h.point && (
+                        <circle
+                          key={h.key}
+                          cx={h.point[0]}
+                          cy={h.point[1]}
+                          r={0.28}
+                          fill="#2563eb"
+                          fillOpacity={0.9}
+                          stroke="#ffffff"
+                          strokeWidth={0.06}
+                          style={{ pointerEvents: "auto", touchAction: "none", cursor: "grab" }}
+                          onPointerDown={(e) => startDrag(e, h.key)}
+                        >
+                          <title>{h.label}</title>
+                        </circle>
+                      ),
+                  )}
+                </svg>
+              )}
+            </div>
           ) : (
             <p className="text-sm text-neutral-500">No preview yet.</p>
           )}
+          <p className={`absolute bottom-2 left-3 z-10 text-xs ${overBudget ? "font-semibold text-red-600" : "text-neutral-500"}`}>
+            Rendered in {render.ms.toFixed(2)} ms (budget &lt; 16 ms)
+            {overBudget ? " — over budget, investigate before shipping" : ""}
+            {" · "}Pose: {character.pose} · {character.face.expression}
+          </p>
         </section>
 
         {/* Controls — right edge */}
-        <aside className="w-full shrink-0 overflow-y-auto border-t border-neutral-200 bg-white p-4 sm:p-5 lg:w-80 lg:border-l lg:border-t-0">
+        <aside className="max-h-[45dvh] w-full shrink-0 overflow-y-auto border-t border-neutral-200 bg-white p-4 sm:p-5 lg:max-h-none lg:w-80 lg:border-l lg:border-t-0">
           <label className="block text-xs font-semibold uppercase tracking-wide text-neutral-500" htmlFor="char-name">
             Character name
           </label>
           <input
             id="char-name"
             value={character.name}
-            onChange={(e) => update({ name: e.target.value })}
+            onChange={(e) => updateLive({ name: e.target.value })}
+            onBlur={commitCurrent}
             maxLength={60}
             className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none"
           />
@@ -318,7 +684,7 @@ export default function CreatorPage() {
           <ControlGroup title="Pose">
             <div className="grid grid-cols-3 gap-2">
               {CREATOR_POSES.map((p) => (
-                <ChoiceButton key={p} active={character.pose === p} onClick={() => update({ pose: p })}>
+                <ChoiceButton key={p} active={character.pose === p} onClick={() => setPose(p)}>
                   {p}
                 </ChoiceButton>
               ))}
@@ -327,12 +693,78 @@ export default function CreatorPage() {
               <summary className="cursor-pointer text-xs text-neutral-500">All {POSE_NAMES.length} poses</summary>
               <div className="mt-2 grid grid-cols-3 gap-2">
                 {POSE_NAMES.filter((p) => !CREATOR_POSES.includes(p as PoseName)).map((p) => (
-                  <ChoiceButton key={p} active={character.pose === p} onClick={() => update({ pose: p as PoseName })}>
+                  <ChoiceButton key={p} active={character.pose === p} onClick={() => setPose(p as PoseName)}>
                     {p}
                   </ChoiceButton>
                 ))}
               </div>
             </details>
+            <div className="mt-3 flex gap-2">
+              <input
+                value={poseName}
+                onChange={(e) => setPoseName(e.target.value)}
+                maxLength={40}
+                aria-label="Custom pose name"
+                className="min-w-0 flex-1 rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+              />
+              <button
+                type="button"
+                onClick={saveCurrentPose}
+                className="shrink-0 rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100"
+                title="Save the current limb angles as a reusable pose"
+              >
+                Save pose
+              </button>
+              <button
+                type="button"
+                onClick={resetPose}
+                className="shrink-0 rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100"
+                title="Clear dragged limb angles, back to the base pose"
+              >
+                Reset
+              </button>
+            </div>
+            {customPoses.length > 0 && (
+              <div className="mt-2 flex flex-wrap gap-2">
+                {customPoses.map((p) => (
+                  <span key={p.id} className="inline-flex items-center gap-1 rounded-full bg-neutral-100 py-1 pl-3 pr-1 text-xs">
+                    <button type="button" onClick={() => applyCustomPose(p)} title={`Apply pose ${p.name}`}>
+                      {p.name}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => deleteCustomPose(p.id)}
+                      aria-label={`Delete pose ${p.name}`}
+                      className="rounded-full px-1 font-bold text-neutral-500 hover:text-red-600"
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
+            <p className="mt-2 text-xs leading-relaxed text-neutral-400">
+              Turn on the pose editor above the canvas and drag the blue dots to pose the limbs by hand.
+            </p>
+          </ControlGroup>
+
+          <ControlGroup title="Family — one character, whole family">
+            <div className="grid grid-cols-3 gap-2">
+              {(["female", "child", "elder"] as FamilyKind[]).map((kind) => (
+                <button
+                  key={kind}
+                  type="button"
+                  onClick={() => makeVariant(kind)}
+                  className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm capitalize hover:bg-neutral-100"
+                  title={`Create a ${kind} variant of this character and add it to your cast`}
+                >
+                  {kind}
+                </button>
+              ))}
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-neutral-400">
+              Same style, same outfit family — adjusted proportions, face and hair. The variant is added to your cast.
+            </p>
           </ControlGroup>
 
           <ControlGroup title="Expression">
@@ -368,7 +800,8 @@ export default function CreatorPage() {
                 min={0}
                 max={1}
                 step={0.05}
-                onChange={(v) => updateFace({ mouth: v })}
+                onChange={(v) => updateFaceLive({ mouth: v })}
+                onCommit={commitCurrent}
               />
               <Slider
                 label="Eye size"
@@ -376,7 +809,8 @@ export default function CreatorPage() {
                 min={0.5}
                 max={2}
                 step={0.05}
-                onChange={(v) => updateFace({ eyeSize: v })}
+                onChange={(v) => updateFaceLive({ eyeSize: v })}
+                onCommit={commitCurrent}
               />
               <Slider
                 label="Eye spacing"
@@ -384,7 +818,8 @@ export default function CreatorPage() {
                 min={0.5}
                 max={2}
                 step={0.05}
-                onChange={(v) => updateFace({ eyeSpacing: v })}
+                onChange={(v) => updateFaceLive({ eyeSpacing: v })}
+                onCommit={commitCurrent}
               />
             </div>
           </ControlGroup>
@@ -428,19 +863,22 @@ export default function CreatorPage() {
             </select>
           </ControlGroup>
 
-          <ControlGroup title="Outfit & props">
-            <label className="block text-xs text-neutral-500" htmlFor="outfit">Outfit</label>
-            <select
-              id="outfit"
-              value={character.outfit.outfit}
-              onChange={(e) => updateOutfit({ outfit: e.target.value as OutfitName })}
-              className="mt-1 w-full rounded-md border border-neutral-300 px-2 py-2 text-sm"
-            >
-              {OUTFIT_NAMES.map((o) => (
-                <option key={o} value={o}>{o}</option>
+          <ControlGroup title="Wardrobe">
+            <p className="mb-2 text-xs text-neutral-500">Era packs — one click dresses the character:</p>
+            <div className="mb-3 grid grid-cols-3 gap-2">
+              {ERA_PACKS.map((pack) => (
+                <button
+                  key={pack.id}
+                  type="button"
+                  onClick={() => applyEraPack(pack)}
+                  title={pack.description}
+                  className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm hover:bg-neutral-100"
+                >
+                  {pack.name}
+                </button>
               ))}
-            </select>
-            <label className="mt-3 block text-xs text-neutral-500" htmlFor="hat">Hat / headwear</label>
+            </div>
+            <label className="block text-xs text-neutral-500" htmlFor="hat">Headwear</label>
             <select
               id="hat"
               value={character.outfit.hat}
@@ -451,6 +889,73 @@ export default function CreatorPage() {
                 <option key={h} value={h}>{h}</option>
               ))}
             </select>
+            <label className="mt-3 block text-xs text-neutral-500" htmlFor="outfit">Top / outfit</label>
+            <select
+              id="outfit"
+              value={character.outfit.outfit}
+              onChange={(e) => updateOutfit({ outfit: e.target.value as OutfitName })}
+              className="mt-1 w-full rounded-md border border-neutral-300 px-2 py-2 text-sm"
+            >
+              {OUTFIT_NAMES.map((o) => (
+                <option key={o} value={o}>{o}</option>
+              ))}
+            </select>
+            <label className="mt-3 block text-xs text-neutral-500" htmlFor="legs">Bottom</label>
+            <select
+              id="legs"
+              value={character.outfit.legsOverride ?? "default"}
+              onChange={(e) =>
+                updateOutfit({ legsOverride: e.target.value === "default" ? null : (e.target.value as "long" | "shorts") })
+              }
+              className="mt-1 w-full rounded-md border border-neutral-300 px-2 py-2 text-sm"
+            >
+              <option value="default">Outfit default</option>
+              <option value="long">Long trousers</option>
+              <option value="shorts">Shorts</option>
+            </select>
+            <div className="mt-3 flex items-end gap-2">
+              <label className="block flex-1 text-xs text-neutral-500" htmlFor="shoe-color">
+                Footwear colour
+                <input
+                  id="shoe-color"
+                  type="color"
+                  value={character.outfit.shoeColor ?? "#3a2a20"}
+                  onChange={(e) => updateOutfit({ shoeColor: e.target.value })}
+                  className="mt-1 block h-9 w-full cursor-pointer rounded-md border border-neutral-300 bg-white px-1"
+                />
+              </label>
+              <button
+                type="button"
+                onClick={() => updateOutfit({ shoeColor: null })}
+                disabled={character.outfit.shoeColor === null}
+                className="rounded-md border border-neutral-300 px-2 py-2 text-xs hover:bg-neutral-100 disabled:opacity-40"
+                title="Use the outfit's own shoe colour"
+              >
+                Default
+              </button>
+            </div>
+            <label className="mt-3 block text-xs text-neutral-500" htmlFor="accessory">Accessory</label>
+            <select
+              id="accessory"
+              value={character.outfit.accessory}
+              onChange={(e) => updateOutfit({ accessory: e.target.value as Character["outfit"]["accessory"] })}
+              className="mt-1 w-full rounded-md border border-neutral-300 px-2 py-2 text-sm"
+            >
+              <option value="none">none</option>
+              <option value="scarf">scarf</option>
+            </select>
+            {character.outfit.accessory === "scarf" && (
+              <label className="mt-2 block text-xs text-neutral-500" htmlFor="accessory-color">
+                Scarf colour
+                <input
+                  id="accessory-color"
+                  type="color"
+                  value={character.outfit.accessoryColor}
+                  onChange={(e) => updateOutfit({ accessoryColor: e.target.value })}
+                  className="mt-1 block h-9 w-full cursor-pointer rounded-md border border-neutral-300 bg-white px-1"
+                />
+              </label>
+            )}
             <label className="mt-3 block text-xs text-neutral-500" htmlFor="prop">Held prop</label>
             <select
               id="prop"
@@ -462,19 +967,48 @@ export default function CreatorPage() {
                 <option key={p} value={p}>{p}</option>
               ))}
             </select>
+            {character.outfit.hold !== "none" && (
+              <label className="mt-3 block text-xs text-neutral-500" htmlFor="hold-hand">
+                Held in
+                <select
+                  id="hold-hand"
+                  value={character.outfit.holdHand}
+                  onChange={(e) => updateOutfit({ holdHand: e.target.value as "front" | "back" })}
+                  className="mt-1 w-full rounded-md border border-neutral-300 px-2 py-2 text-sm"
+                >
+                  <option value="front">Front hand</option>
+                  <option value="back">Back hand</option>
+                </select>
+              </label>
+            )}
             <div className="mt-3">
               <Toggle label="Facing left" checked={character.facing === "left"} onChange={(v) => update({ facing: v ? "left" : "right" })} />
             </div>
           </ControlGroup>
 
           <ControlGroup title="Style">
+            <label className="block text-xs text-neutral-500" htmlFor="skin">
+              Skin (white = day, tan = warm day, silhouette = night)
+            </label>
+            <select
+              id="skin"
+              value={character.style.skin}
+              onChange={(e) => updateStyleLive({ skin: e.target.value as Character["style"]["skin"] })}
+              onBlur={commitCurrent}
+              className="mt-1 w-full rounded-md border border-neutral-300 bg-white px-3 py-2 text-sm"
+            >
+              <option value="white">White</option>
+              <option value="tan">Tan</option>
+              <option value="silhouette">Silhouette</option>
+            </select>
             <Slider
               label="Outline wobble (×1 = engine default)"
               value={character.style.wobble}
               min={0}
               max={3}
               step={0.05}
-              onChange={(v) => updateStyle({ wobble: v })}
+              onChange={(v) => updateStyleLive({ wobble: v })}
+              onCommit={commitCurrent}
             />
             <Slider
               label="Limb width"
@@ -482,7 +1016,8 @@ export default function CreatorPage() {
               min={0.03}
               max={0.2}
               step={0.005}
-              onChange={(v) => updateStyle({ limbWidth: v })}
+              onChange={(v) => updateStyleLive({ limbWidth: v })}
+              onCommit={commitCurrent}
             />
             <Slider
               label="Outline width"
@@ -490,7 +1025,8 @@ export default function CreatorPage() {
               min={0.02}
               max={0.2}
               step={0.005}
-              onChange={(v) => updateStyle({ outlineWidth: v })}
+              onChange={(v) => updateStyleLive({ outlineWidth: v })}
+              onCommit={commitCurrent}
             />
             <label className="mt-3 block text-xs text-neutral-500" htmlFor="seed">
               Random seed (same seed = same drawing)
@@ -503,13 +1039,22 @@ export default function CreatorPage() {
               value={character.style.seed}
               onChange={(e) => {
                 const n = Number(e.target.value);
-                if (Number.isFinite(n)) updateStyle({ seed: Math.max(0, Math.min(100000, Math.round(n))) });
+                if (Number.isFinite(n)) updateStyleLive({ seed: Math.max(0, Math.min(100000, Math.round(n))) });
               }}
+              onBlur={commitCurrent}
               className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm"
             />
           </ControlGroup>
 
           <div className="mt-4 flex gap-2 border-t border-neutral-200 pt-4">
+            <button
+              type="button"
+              onClick={saveToCast}
+              className="flex-1 rounded-md bg-neutral-900 px-3 py-2 text-sm text-white hover:bg-neutral-700"
+              title="Add this character to your cast library"
+            >
+              Save to cast
+            </button>
             <button
               type="button"
               onClick={copyJson}
@@ -583,6 +1128,7 @@ function Slider({
   max,
   step,
   onChange,
+  onCommit,
 }: {
   label: string;
   value: number;
@@ -590,6 +1136,7 @@ function Slider({
   max: number;
   step: number;
   onChange: (v: number) => void;
+  onCommit: () => void;
 }) {
   return (
     <label className="block text-sm">
@@ -604,6 +1151,8 @@ function Slider({
         step={step}
         value={value}
         onChange={(e) => onChange(Number(e.target.value))}
+        onPointerUp={onCommit}
+        onBlur={onCommit}
         className="mt-1 w-full accent-neutral-900"
       />
     </label>

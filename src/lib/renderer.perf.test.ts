@@ -15,7 +15,7 @@ function medianMs(render: () => string, warmup = 20, runs = 100): { median: numb
 }
 
 describe("preview render budget (<16ms)", () => {
-  it("default character (stand, ragged, caveman) renders under budget", () => {
+  it("default character (stand, short, shirt) renders under budget", () => {
     const c = defaultCharacter();
     const { median, p95, max } = medianMs(() => renderCharacterSvg(c));
     // Logged for the M0b report; the assertion is the budget.

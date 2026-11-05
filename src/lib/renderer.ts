@@ -26,6 +26,7 @@ import type {
   LookName,
   OutfitDef,
   OutfitName,
+  PoseKind,
   PropName,
 } from "./character";
 import { HAIR_COLORS, OUTFITS, POSES } from "./character";
@@ -389,7 +390,9 @@ function hairRagged(ctx: HairCtx, color: string): string {
   const start = pp(80, 1.02);
   let d = `M${f2(start)} `;
   const cents = [64, 44, 24, 4, -16, -36, -56, -76, -96, -116];
-  const lens = [0.12, 0.17, 0.2, 0.22, 0.2, 0.2, 0.2, 0.18, 0.16, 0.14];
+  // Tuft lengths reduced ~25% (M1, 2026-11-05): the old spikes made
+  // the hair a helmet covering half the head.
+  const lens = [0.09, 0.13, 0.15, 0.17, 0.15, 0.15, 0.15, 0.14, 0.12, 0.11];
   for (let i = 0; i < cents.length; i++) {
     const c = cents[i];
     const len = lens[i] * rng.uniform(0.85, 1.15);
@@ -401,9 +404,9 @@ function hairRagged(ctx: HairCtx, color: string): string {
   }
   d += `L${fmt(hx - 1.03)},${fmt(hy + 0.12)} `;
   for (const [tx, ty, bx, by] of [
-    [-1.14, 0.56, -0.93, 0.34],
-    [-0.84, 0.64, -0.72, 0.3],
-    [-0.6, 0.5, -0.56, 0.12],
+    [-1.08, 0.48, -0.9, 0.3],
+    [-0.8, 0.56, -0.7, 0.28],
+    [-0.58, 0.44, -0.54, 0.12],
   ] as const) {
     d +=
       `Q${fmt(hx + tx + 0.07)},${fmt(hy + ty - 0.2)} ${fmt(hx + tx)},${fmt(hy + ty)} ` +
@@ -415,10 +418,12 @@ function hairRagged(ctx: HairCtx, color: string): string {
     const x1 = hx + xs[i];
     const x2 = hx + xs[i + 1];
     const tx = (x1 + x2) / 2 + 0.1;
-    const ty = hy - 0.7 + rng.uniform(0.27, 0.36);
+    // Fringe tips raised ~0.08 (M1, 2026-11-05): the old fringe hung
+    // low over the forehead and hid the face.
+    const ty = hy - 0.62 + rng.uniform(0.27, 0.36);
     d +=
       `Q${fmt(x1 + 0.02)},${fmt(ty - 0.12)} ${fmt(tx)},${fmt(ty)} ` +
-      `Q${fmt(x2 - 0.05)},${fmt(ty - 0.12)} ${fmt(x2)},${fmt(hy - 0.66)} `;
+      `Q${fmt(x2 - 0.05)},${fmt(ty - 0.12)} ${fmt(x2)},${fmt(hy - 0.58)} `;
   }
   d += `Q${fmt(hx + 1.0)},${fmt(hy - 0.42)} ${f2(start)} Z`;
   out.push(`<path d="${d}" fill="${base}" stroke="${ink}" stroke-width="${fmt(ow * 0.9)}" stroke-linejoin="round"/>`);
@@ -801,17 +806,17 @@ export function faceSvg(hx: number, hy: number, opts: FaceOpts, ink: string): st
   };
   const [lx, ly] = lookOffset[look] ?? [0, 0];
   const ex = hx + 0.26 + lx;
-  const off = 0.23 * eyeSpacing;
+  // Eyes per the measured style guide (R3, 2026-11-05): centres
+  // ±0.30 from the face centre (spacing 0.60), eye line +0.08 below
+  // the head centre (~55% down the head). The old placement (above
+  // centre, 0.46 spacing) is what made the default read "worried".
+  const off = 0.3 * eyeSpacing;
   const e1 = ex - off;
   const e2 = ex + off;
-  const ey = hy - 0.05 + ly;
+  const ey = hy + 0.08 + ly;
   const s: string[] = [];
   const sw = `stroke="${ink}" stroke-width="0.07" fill="none" stroke-linecap="round"`;
   const big = face === "surprised" || face === "scared" || face === "shocked";
-  let rx = big ? 0.12 : 0.085;
-  let ry = big ? 0.17 : 0.13;
-  rx *= eyeSize;
-  ry *= eyeSize;
   const f2 = (n: number): string => fmt(n, 2);
   if (stubble) {
     s.push(
@@ -827,8 +832,11 @@ export function faceSvg(hx: number, hy: number, opts: FaceOpts, ink: string): st
       s.push(`<path d="M${f2(e - 0.11)},${f2(ey + 0.03)} Q${f2(e)},${f2(ey - 0.1)} ${f2(e + 0.11)},${f2(ey + 0.03)}" ${sw}/>`);
     }
   } else {
-    const erx = big ? 0.13 : lashes ? 0.1 : 0.085;
-    const ery = big ? 0.18 : lashes ? 0.145 : 0.125;
+    // Normal eyes are small dots (R3: dot diameter ~0.10 head radii);
+    // surprised/scared/shocked get the bigger ellipses. Lashes get a
+    // slightly larger dot so the lash lines still read.
+    const erx = big ? 0.13 : lashes ? 0.075 : 0.06;
+    const ery = big ? 0.18 : lashes ? 0.075 : 0.06;
     const px = look === "back" ? -0.03 : look === "forward" ? 0.025 : 0.015;
     for (const e of [e1, e2]) {
       s.push(`<ellipse cx="${fmt(e)}" cy="${fmt(ey)}" rx="${fmt(erx * eyeSize)}" ry="${fmt(ery * eyeSize)}" fill="${ink}"/>`);
@@ -916,7 +924,8 @@ export function faceSvg(hx: number, hy: number, opts: FaceOpts, ink: string): st
   } else if (face === "sleepy") {
     s.push(`<ellipse cx="${f2(mx)}" cy="${f2(my + 0.02)}" rx="0.07" ry="0.06" fill="${ink}"/>`);
   } else {
-    s.push(`<path d="M${f2(mx - 0.12)},${f2(my)} L${f2(mx + 0.12)},${f2(my)}" ${sw}/>`);
+    // Neutral mouth: dash 0.32 wide at +0.43 below head centre (R5).
+    s.push(`<path d="M${f2(mx - 0.16)},${f2(my)} L${f2(mx + 0.16)},${f2(my)}" ${sw}/>`);
   }
   if (face === "scared" || face === "worried" || face === "shocked") {
     s.push(
@@ -1190,6 +1199,200 @@ export function propSvg(name: PropName, angle: number, ink: string, ow: number):
 }
 
 /* ------------------------------------------------------------------ */
+/* Skeleton — the forward-kinematics result shared by the renderer,    */
+/* the pose-matrix test and the visual pose editor. One source of      */
+/* truth: if the renderer and the editor disagreed about where a hand  */
+/* is, drag targets would land in the wrong place.                     */
+/* ------------------------------------------------------------------ */
+
+export interface Skeleton {
+  /** Total torso lean in degrees (pose lean + character lean). */
+  lean: number;
+  kind: PoseKind;
+  /** True when the pose draws both arms behind the head. */
+  behind: boolean;
+  hip: Pt;
+  neck: Pt;
+  head: Pt;
+  shoulder: Pt;
+  backArm: { knee: Pt; end: Pt };
+  frontArm: { knee: Pt; end: Pt };
+  backLeg: { knee: Pt; end: Pt };
+  frontLeg: { knee: Pt; end: Pt };
+  /** Ground y in character units (max of the anchor keys). */
+  ground: number;
+  /** Anchor keys after the lie rotation — used for the ground shadow. */
+  anchorKeys: Pt[];
+}
+
+export function computeSkeleton(c: Character): Skeleton {
+  const pose = POSES[c.pose];
+  if (!pose) throw new Error(`renderer: unknown pose "${c.pose}"`);
+  const torso = c.proportions.torso;
+  const lean = pose.lean + c.lean;
+  const backArm: LimbAngles = c.backArm ?? pose.backArm;
+  const frontArm: LimbAngles = c.frontArm ?? pose.frontArm;
+  const backLeg: LimbAngles = c.backLeg ?? pose.backLeg;
+  const frontLeg: LimbAngles = c.frontLeg ?? pose.frontLeg;
+  const lr = (lean * Math.PI) / 180;
+  const hip: Pt = [0, 0];
+  const neck: Pt = [torso * Math.sin(lr), -torso * Math.cos(lr)];
+  const head: Pt = [neck[0] + 0.98 * Math.sin(lr), neck[1] - 0.98 * Math.cos(lr)];
+  const shoulder: Pt = [neck[0] - 0.3 * Math.sin(lr), neck[1] + 0.3 * Math.cos(lr)];
+  const backArmL = limb(shoulder[0], shoulder[1], c.proportions.upperArm, c.proportions.lowerArm, backArm[0], backArm[1]);
+  const frontArmL = limb(shoulder[0], shoulder[1], c.proportions.upperArm, c.proportions.lowerArm, frontArm[0], frontArm[1]);
+  const backLegL = limb(hip[0], hip[1], c.proportions.upperLeg, c.proportions.lowerLeg, backLeg[0], backLeg[1]);
+  const frontLegL = limb(hip[0], hip[1], c.proportions.upperLeg, c.proportions.lowerLeg, frontLeg[0], frontLeg[1]);
+  const [hx, hy] = head;
+  // ---- anchoring to the ground (same keys as the renderer)
+  const rot = pose.kind === "lie" ? -90 : 0;
+  const rp = (p: Pt): Pt => {
+    if (!rot) return p;
+    const a = (rot * Math.PI) / 180;
+    return [p[0] * Math.cos(a) - p[1] * Math.sin(a), p[0] * Math.sin(a) + p[1] * Math.cos(a)];
+  };
+  let keys: Pt[] = [
+    [backLegL.end[0] + 0.17, backLegL.end[1] + 0.14],
+    [frontLegL.end[0] + 0.17, frontLegL.end[1] + 0.14],
+  ];
+  if (pose.kind === "sit") keys.push([0.0, 0.32]);
+  if (pose.kind === "lie") {
+    keys = keys.concat([
+      [hx - 1.0, hy],
+      [hx, hy - 1.0],
+      [hx, hy + 1.0],
+      [hx + 1.0, hy],
+      [0, -0.4],
+      [0, 0.4],
+    ]);
+    keys = keys.map(rp);
+  }
+  const ground = Math.max(...keys.map((k) => k[1]));
+  return {
+    lean,
+    kind: pose.kind,
+    behind: pose.armsBehindHead,
+    hip,
+    neck,
+    head,
+    shoulder,
+    backArm: backArmL,
+    frontArm: frontArmL,
+    backLeg: backLegL,
+    frontLeg: frontLegL,
+    ground,
+    anchorKeys: keys,
+  };
+}
+
+export interface CharacterJoints {
+  head: Pt;
+  neck: Pt;
+  hip: Pt;
+  shoulder: Pt;
+  backElbow: Pt;
+  backHand: Pt;
+  frontElbow: Pt;
+  frontHand: Pt;
+  backKnee: Pt;
+  backFoot: Pt;
+  frontKnee: Pt;
+  frontFoot: Pt;
+  ground: number;
+}
+
+/**
+ * Joint positions in SVG user space — the coordinate space inside the
+ * <svg> element produced by renderCharacterSvg (after the outer <g>
+ * transform, before viewBox scaling). The pose editor overlays its
+ * drag handles at these points; a pointer in SVG user space maps back
+ * with jointsToCharacterSpace().
+ */
+export function characterJoints(c: Character): CharacterJoints {
+  const sk = computeSkeleton(c);
+  const rot = sk.kind === "lie" ? -90 : 0;
+  const d = c.facing === "left" ? -1 : 1;
+  const s = c.scale;
+  const map = (p: Pt): Pt => {
+    let q = p;
+    if (rot) {
+      const a = (rot * Math.PI) / 180;
+      q = [q[0] * Math.cos(a) - q[1] * Math.sin(a), q[0] * Math.sin(a) + q[1] * Math.cos(a)];
+    }
+    return [s * d * q[0], s * (q[1] - sk.ground)];
+  };
+  return {
+    head: map(sk.head),
+    neck: map(sk.neck),
+    hip: map(sk.hip),
+    shoulder: map(sk.shoulder),
+    backElbow: map(sk.backArm.knee),
+    backHand: map(sk.backArm.end),
+    frontElbow: map(sk.frontArm.knee),
+    frontHand: map(sk.frontArm.end),
+    backKnee: map(sk.backLeg.knee),
+    backFoot: map(sk.backLeg.end),
+    frontKnee: map(sk.frontLeg.knee),
+    frontFoot: map(sk.frontLeg.end),
+    ground: 0,
+  };
+}
+
+/**
+ * Inverse of the characterJoints map: an SVG-user-space point back to
+ * character space (the space limb() works in, hip at the origin).
+ * Used by the pose editor to turn a dragged handle position into new
+ * limb angles via limbAnglesForPoint().
+ */
+export function jointsToCharacterSpace(c: Character, p: Pt): Pt {
+  const sk = computeSkeleton(c);
+  const rot = sk.kind === "lie" ? -90 : 0;
+  const d = c.facing === "left" ? -1 : 1;
+  const s = c.scale;
+  let q: Pt = [p[0] / (s * d), p[1] / s + sk.ground];
+  if (rot) {
+    const a = (-rot * Math.PI) / 180;
+    q = [q[0] * Math.cos(a) - q[1] * Math.sin(a), q[0] * Math.sin(a) + q[1] * Math.cos(a)];
+  }
+  return q;
+}
+
+/**
+ * Two-bone limb angles that put a limb's end at `target`.
+ * Proper two-bone IK: the upper limb leaves the joint at
+ * (target direction ± alpha), where alpha comes from the law of
+ * cosines, and the lower limb bends from the elbow toward the target.
+ * `bend` picks the elbow side: -1 for arms (elbows bend back toward
+ * the body, as in every pose in the table), +1 for legs (knees bend
+ * forward). Always returns valid angles; beyond reach the limb points
+ * straight at the target at full extension. Angles are degrees from
+ * straight down (+y), matching limb().
+ */
+export function limbAnglesForPoint(
+  start: Pt,
+  upper: number,
+  lower: number,
+  target: Pt,
+  bend: 1 | -1 = -1,
+): [number, number] {
+  const dx = target[0] - start[0];
+  const dy = target[1] - start[1];
+  const phi = (Math.atan2(dx, dy) * 180) / Math.PI;
+  const d = Math.hypot(dx, dy);
+  // Beyond reach: point straight at the target at full extension.
+  if (d >= upper + lower) return [phi, 0];
+  const clamped = Math.max(Math.abs(upper - lower) + 0.001, Math.min(upper + lower - 0.001, d));
+  const cosA = (upper * upper + clamped * clamped - lower * lower) / (2 * upper * clamped);
+  const alpha = (Math.acos(Math.max(-1, Math.min(1, cosA))) * 180) / Math.PI;
+  const a1 = phi + bend * alpha;
+  const elbow = limb(start[0], start[1], upper, lower, a1, 0).knee;
+  const total = (Math.atan2(target[0] - elbow[0], target[1] - elbow[1]) * 180) / Math.PI;
+  let a2 = total - a1;
+  a2 = ((a2 + 540) % 360) - 180;
+  return [a1, a2];
+}
+
+/* ------------------------------------------------------------------ */
 /* character() — ported from ink.py. Assembles the parts in z-order.   */
 /* Returns the inner <g> content (no <svg> wrapper, no defs).          */
 /* Coordinates are in character units (head radius = 1); the caller     */
@@ -1203,36 +1406,33 @@ export interface CharacterRenderOpts {
 }
 
 export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts = {}): string {
-  const pose = POSES[c.pose];
-  if (!pose) throw new Error(`renderer: unknown pose "${c.pose}"`);
+  const sk = computeSkeleton(c);
   const ink = c.style.ink;
   const ow = c.style.outlineWidth;
   const lw = c.style.limbWidth;
   const torso = c.proportions.torso;
   const headR = c.proportions.headRadius;
-  const upperArm = c.proportions.upperArm;
-  const lowerArm = c.proportions.lowerArm;
-  const upperLeg = c.proportions.upperLeg;
-  const lowerLeg = c.proportions.lowerLeg;
 
-  const lean = pose.lean + c.lean;
-  const backArm: LimbAngles = c.backArm ?? pose.backArm;
-  const frontArm: LimbAngles = c.frontArm ?? pose.frontArm;
-  const backLeg: LimbAngles = c.backLeg ?? pose.backLeg;
-  const frontLeg: LimbAngles = c.frontLeg ?? pose.frontLeg;
-  const kind = pose.kind;
-  const behind = pose.armsBehindHead;
-
-  const lr = (lean * Math.PI) / 180;
-  const hip: Pt = [0, 0];
-  const neck: Pt = [torso * Math.sin(lr), -torso * Math.cos(lr)];
-  const head: Pt = [neck[0] + 0.98 * Math.sin(lr), neck[1] - 0.98 * Math.cos(lr)];
-  const sh: Pt = [neck[0] - 0.3 * Math.sin(lr), neck[1] + 0.3 * Math.cos(lr)];
-  const backArmL = limb(sh[0], sh[1], upperArm, lowerArm, backArm[0], backArm[1]);
-  const frontArmL = limb(sh[0], sh[1], upperArm, lowerArm, frontArm[0], frontArm[1]);
-  const backLegL = limb(hip[0], hip[1], upperLeg, lowerLeg, backLeg[0], backLeg[1]);
-  const frontLegL = limb(hip[0], hip[1], upperLeg, lowerLeg, frontLeg[0], frontLeg[1]);
+  const lean = sk.lean;
+  const kind = sk.kind;
+  const behind = sk.behind;
+  const hip = sk.hip;
+  const head = sk.head;
+  const sh = sk.shoulder;
+  const backArmL = sk.backArm;
+  const frontArmL = sk.frontArm;
+  const backLegL = sk.backLeg;
+  const frontLegL = sk.frontLeg;
   const [hx, hy] = head;
+
+  // Skin setting (R8, style guide): white for night scenes, tan for
+  // day scenes, silhouette for distant/scale shots. A silhouette
+  // draws the face in white ink on a dark head, with black hair.
+  const skin = c.style.skin;
+  const skinFill = skin === "tan" ? "#f2e3c8" : skin === "silhouette" ? "#211c19" : "#ffffff";
+  const skinShade = skin === "tan" ? "#e0cda6" : skin === "silhouette" ? "#211c19" : "#e9e4dc";
+  const faceInk = skin === "silhouette" ? "#ffffff" : ink;
+  const hairColor = skin === "silhouette" ? "black" : c.hair.color;
 
   const outfitName: OutfitName = c.outfit.outfit;
   const o: OutfitDef | null =
@@ -1249,6 +1449,7 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
   let shoe = o ? o.shoes : "#ffffff";
   if (!c.outfit.shoes) shoe = "#ffffff";
   if (outfitName === "caveman") shoe = c.outfit.furBoots ? "#8a6a44" : "#ffffff";
+  if (c.outfit.shoeColor) shoe = c.outfit.shoeColor;
 
   const limbPath = (a: Pt, k: Pt, b: Pt, w = 1.0): string =>
     `<path d="${pathFromPoints([a, k])}" stroke="${ink}" stroke-width="${fmt(lw * 1.12 * w)}" fill="none" stroke-linecap="round"/>` +
@@ -1292,8 +1493,10 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
 
   const trouser = (k: Pt, f: Pt): string => {
     if (!o || !o.pants) return "";
-    if (o.legs === "long") return tube([hip, k, partWay(k, f, 0.93)], 0.36, o.pants, ink, ow);
-    if (o.legs === "shorts") return tube([hip, partWay(hip, k, 0.8)], 0.42, o.pants, ink, ow);
+    // Wardrobe legs override (null = the outfit's own legs).
+    const legsKind = c.outfit.legsOverride ?? o.legs;
+    if (legsKind === "long") return tube([hip, k, partWay(k, f, 0.93)], 0.36, o.pants, ink, ow);
+    if (legsKind === "shorts") return tube([hip, partWay(hip, k, 0.8)], 0.42, o.pants, ink, ow);
     return "";
   };
 
@@ -1305,8 +1508,25 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
   const propAt = (pt: Pt): string =>
     `<g transform="translate(${fmt(pt[0])},${fmt(pt[1])})">${propSvg(hold, c.outfit.holdAngle, ink, ow)}</g>`;
 
-  const parts: string[] = [hairBackSvg(hx, hy, c.hair.style, c.hair.color, ink, ow)];
+  const frontArmHolding = hold !== "none" && handSide === "front";
+  const frontArmEl = arm(sh, frontArmL.knee, frontArmL.end, frontArmHolding);
+  // Hanging-arm rule (M1, 2026-11-05): with a sleeveless garment
+  // (caveman fur, cavedress, toga) a front arm hanging straight down
+  // draws as a thin diagonal line across the whole garment — it reads
+  // as a scratch, not a limb (QA 2026-11-05). Sleeved outfits keep
+  // the arm in front: the sleeve tube already reads as an arm. So a
+  // hanging, empty, sleeveless front arm goes behind the garment with
+  // the back arm; raised / pointing / holding arms stay in front.
+  const frontArmBehind =
+    !behind &&
+    (!o || o.sleeve === "none") &&
+    outfitName !== "none" &&
+    !frontArmHolding &&
+    frontArmL.end[1] > 0;
+
+  const parts: string[] = [hairBackSvg(hx, hy, c.hair.style, hairColor, ink, ow)];
   if (!behind) parts.push(arm(sh, backArmL.knee, backArmL.end, hold !== "none" && handSide === "back"));
+  if (frontArmBehind) parts.push(frontArmEl);
   if (hold !== "none" && handSide === "back") parts.push(propAt(backArmL.end));
   parts.push(leg(backLegL.knee, backLegL.end));
   parts.push(leg(frontLegL.knee, frontLegL.end));
@@ -1319,6 +1539,16 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
   } else if (o) {
     tor = hipsSvg(o, ink, ow) + topSvg(o, sit, ink, ow, torso);
   }
+  if (c.outfit.accessory === "scarf") {
+    // Scarf in torso space: a band across the neck + a tail down the
+    // chest. Drawn inside the torso group so it leans with the body;
+    // the head circle (drawn later) covers its top edge, so it peeks
+    // out from under the chin like a real scarf.
+    const sc = c.outfit.accessoryColor;
+    tor +=
+      `<path d="M-0.48,${fmt(-torso + 0.05)} Q0,${fmt(-torso - 0.12)} 0.48,${fmt(-torso + 0.05)} L0.48,${fmt(-torso + 0.22)} Q0,${fmt(-torso + 0.05)} -0.48,${fmt(-torso + 0.22)} Z" fill="${sc}" stroke="${ink}" stroke-width="${fmt(ow)}"/>` +
+      `<path d="M0.18,${fmt(-torso + 0.15)} Q0.32,${fmt(-torso + 0.55)} 0.24,${fmt(-torso + 0.95)} Q0.14,${fmt(-torso + 0.6)} 0.05,${fmt(-torso + 0.18)} Z" fill="${sc}" stroke="${ink}" stroke-width="${fmt(ow)}"/>`;
+  }
   parts.push(`<g transform="rotate(${fmt(lean, 1)})">${tor}</g>`);
   if (behind) {
     parts.push(`<path d="${pathFromPoints([sh, backArmL.knee, backArmL.end])}" ${line}/>` + sleeve(sh, backArmL.knee, backArmL.end));
@@ -1326,12 +1556,18 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
   }
   // head
   const hair = c.hair.style;
-  const hcol = c.hair.color;
-  parts.push(`<circle cx="${fmt(hx)}" cy="${fmt(hy)}" r="${fmt(headR)}" fill="${c.style.skinFill}"/>`);
+  const hcol = hairColor;
+  // Head (R2): slightly wider than tall, 1.11 : 1 — an ellipse, not
+  // a circle. rx = headR * 1.055, ry = headR * 0.95. The shade
+  // crescent scales with it. Hair/hats anchor on (hx, hy) and overlap
+  // the crown, so the 0.05 vertical change does not float them.
+  const headRx = headR * 1.055;
+  const headRy = headR * 0.95;
+  parts.push(`<ellipse cx="${fmt(hx)}" cy="${fmt(hy)}" rx="${fmt(headRx)}" ry="${fmt(headRy)}" fill="${skinFill}"/>`);
   parts.push(
-    `<path d="M${fmt(hx - 0.97)},${fmt(hy + 0.1)} A1,1 0 0,0 ${fmt(hx + 0.35)},${fmt(hy + 0.94)} A1.05,1.05 0 0,1 ${fmt(hx - 0.97)},${fmt(hy + 0.1)} Z" fill="${c.style.skinShade}"/>`,
+    `<path d="M${fmt(hx - headRx * 0.97)},${fmt(hy + headRy * 0.1)} A${fmt(headRx)},${fmt(headRy)} 0 0,0 ${fmt(hx + headRx * 0.35)},${fmt(hy + headRy * 0.94)} A${fmt(headRx * 1.05)},${fmt(headRy * 1.05)} 0 0,1 ${fmt(hx - headRx * 0.97)},${fmt(hy + headRy * 0.1)} Z" fill="${skinShade}"/>`,
   );
-  parts.push(`<circle cx="${fmt(hx)}" cy="${fmt(hy)}" r="${fmt(headR)}" fill="none" stroke="${ink}" stroke-width="${fmt(ow * 1.15)}"/>`);
+  parts.push(`<ellipse cx="${fmt(hx)}" cy="${fmt(hy)}" rx="${fmt(headRx)}" ry="${fmt(headRy)}" fill="none" stroke="${ink}" stroke-width="${fmt(ow * 1.15)}"/>`);
   if (c.hair.beard !== "none") {
     parts.push(beardSvg(hx, hy, hcol, rng, c.hair.beard, ink, ow));
   }
@@ -1350,37 +1586,16 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
       cold: c.face.cold,
       eyeSize: c.face.eyeSize,
       eyeSpacing: c.face.eyeSpacing,
-    }, ink),
+    }, faceInk),
   );
   parts.push(hatSvg(hx, hy, c.outfit.hat, ink, ow));
   if (hold !== "none" && handSide === "front") parts.push(propAt(frontArmL.end));
-  if (!behind) parts.push(arm(sh, frontArmL.knee, frontArmL.end, hold !== "none" && handSide === "front"));
+  if (!behind && !frontArmBehind) parts.push(frontArmEl);
 
-  // ---- anchoring to the ground
+  // ---- anchoring to the ground (keys live in the skeleton)
   const rot = kind === "lie" ? -90 : 0;
-  const rp = (p: Pt): Pt => {
-    if (!rot) return p;
-    const a = (rot * Math.PI) / 180;
-    return [p[0] * Math.cos(a) - p[1] * Math.sin(a), p[0] * Math.sin(a) + p[1] * Math.cos(a)];
-  };
-  let keys: Pt[] = [
-    [backLegL.end[0] + 0.17, backLegL.end[1] + 0.14],
-    [frontLegL.end[0] + 0.17, frontLegL.end[1] + 0.14],
-  ];
-  if (sit) keys.push([0.0, 0.32]);
-  if (kind === "lie") {
-    keys = keys.concat([
-      [hx - 1.0, hy],
-      [hx, hy - 1.0],
-      [hx, hy + 1.0],
-      [hx + 1.0, hy],
-      [0, -0.4],
-      [0, 0.4],
-    ]);
-    keys = keys.map(rp);
-  }
-  const ground = Math.max(...keys.map((k) => k[1]));
-  const low = keys.filter((k) => k[1] > ground - 0.6).map((k) => k[0]);
+  const ground = sk.ground;
+  const low = sk.anchorKeys.filter((k) => k[1] > ground - 0.6).map((k) => k[0]);
   const lowVals = low.length > 0 ? low : [0];
   const sx0 = Math.min(...lowVals) - 0.5;
   const sx1 = Math.max(...lowVals) + 0.5;
@@ -1411,8 +1626,8 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
 /* wide at 720 px => 80 px per unit). Filter frequencies and the        */
 /* displacement scale are in user-space units, so both must be         */
 /* converted by pxPerUnit:                                              */
-/*   hand baseFrequency = 0.025 cycles/px  * pxPerUnit  = 2.0 /unit    */
-/*   displacement scale = 1.8 px * wobble / pxPerUnit   = 0.0225*wobble */
+/*   hand baseFrequency = 0.018 cycles/px  * pxPerUnit  = 1.44 /unit   */
+/*   displacement scale = 4.0 px * wobble / pxPerUnit   = 0.05*wobble  */
 /*   grain baseFrequency  = 0.9 cycles/px  * pxPerUnit  = 72 /unit     */
 /* The first version of this port used scale = wobble (6.0) directly   */
 /* in unit space — ~265x too strong — which shifted the whole figure   */
@@ -1423,8 +1638,15 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
 /** Pixels per character unit for the default standalone framing. */
 export const PX_PER_UNIT = 80; // 720 px / 9 viewBox units
 
-/** Python engine wobble at 1080p, in pixels (ink.py render_scene). */
-export const WOBBLE_PX = 1.8;
+/** Python engine wobble at 1080p, in pixels (ink.py render_scene).
+ * Raised 2026-11-05 (M1) from 1.8: at 1.8 the displacement was so
+ * subtle that wobble 0 vs 3 looked ~95% identical in QA. Tuned to
+ * 4.0 per the measured style guide (R10): at the default framing
+ * (720 px / 9 units = 80 px per unit) wobble 1 displaces outlines by
+ * up to 0.05 units ≈ 4 px — the guide's 2–4 px peak-deviation target
+ * at 640 px render width — and wobble 3 is three times that, so 0 vs
+ * 3 is obvious. */
+export const WOBBLE_PX = 4.0;
 
 export interface RenderSvgOpts {
   width?: number;
@@ -1460,7 +1682,9 @@ export function renderCharacterSvg(c: Character, opts: RenderSvgOpts = {}): stri
   const vbH = vb.length === 4 && Number.isFinite(vb[3]) && vb[3] > 0 ? vb[3] : 8.5;
   const pxPerUnit = width / vbW;
   // Convert Python pixel-space filter values to character-unit space.
-  const handFreq = 0.025 * pxPerUnit;
+  // handFreq lowered 2026-11-05 (M1) from 0.025 to 0.018 cycles/px:
+  // coarser turbulence reads as hand-drawn wobble instead of fine noise.
+  const handFreq = 0.018 * pxPerUnit;
   const dispScale = (WOBBLE_PX * wobble) / pxPerUnit;
   const grainFreq = 0.9 * pxPerUnit;
   const defs =
