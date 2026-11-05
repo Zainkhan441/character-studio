@@ -58,6 +58,12 @@ export default function Home() {
           <a href="/poses" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">
             Poses
           </a>
+          <a href="/scenes" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">
+            Scenes
+          </a>
+          <a href="/story" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">
+            Script → Video
+          </a>
           <a href="/creator" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-700">
             Open Creator
           </a>
@@ -95,19 +101,25 @@ export default function Home() {
           <a href="/cast" className="rounded-md border border-neutral-300 px-5 py-2.5 text-sm font-medium hover:bg-neutral-100">
             Browse the cast →
           </a>
-          <span className="rounded-md border border-dashed border-neutral-300 px-5 py-2.5 text-sm text-neutral-400" title="Script → scenes is the next milestone">
-            Scenes — coming next
-          </span>
+          <a href="/scenes" className="rounded-md border border-neutral-300 px-5 py-2.5 text-sm font-medium hover:bg-neutral-100">
+            Build a scene →
+          </a>
+          <a href="/story" className="rounded-md border border-neutral-300 px-5 py-2.5 text-sm font-medium hover:bg-neutral-100">
+            Script → video →
+          </a>
         </div>
 
         <div className="mt-12 grid w-full max-w-3xl grid-cols-1 gap-4 text-left sm:grid-cols-3">
           <Feature title="Cast library" body="Five starter characters — adult, female, elder, child, warrior. One click opens any of them in the Creator." />
           <Feature title="Family generator" body="From any character, make a female, child or elder variant — same style, same outfit family." />
           <Feature title="Pose editor" body="Drag arms and legs right on the canvas, save the pose, reuse it forever. The same tool the character importer will use." />
+          <Feature title="Scene editor" body="11 backgrounds × day/dusk/night, cut-away templates, props, animals, camera and lighting — stills that look like the videos in this niche." />
+          <Feature title="Script → video" body="Paste a script. Every line becomes a shot; long lines split into two different shots. Storyboard, reorder, total runtime — ~25 stills a minute." />
+          <Feature title="Cut-aways" body="House, igloo and soil-strata cross-sections — the most valuable shot in explainer videos, built in." />
         </div>
         <p className="mt-10 max-w-xl text-xs leading-relaxed text-neutral-400">
           Free to use. Characters render in your browser — nothing is uploaded, no account, no paid APIs.
-          Scenes (script in → full video out) is the next milestone.
+          Next: character import (upload a cartoon → the tool extracts it) and MP4 export.
         </p>
       </div>
     </main>
