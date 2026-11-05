@@ -10,6 +10,12 @@ export default function Home() {
         A character is data, not a picture. The parametric character renderer
         is coming next.
       </p>
+      <a
+        href="/creator"
+        className="mt-6 rounded-md bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-neutral-700"
+      >
+        Open the Character Creator →
+      </a>
     </main>
   );
 }
