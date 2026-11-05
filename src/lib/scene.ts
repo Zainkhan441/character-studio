@@ -866,16 +866,31 @@ export function renderScene(
   // spills past the card (QA 2026-11-05: "WE NEVER THINK TWICE"
   // at 0.85 overflowed an 8.8-wide card). Title width budget is
   // 7.6 units at ~0.5 em per char.
+  // The card must also fit the VISIBLE band: when the output is
+  // narrower than the 16:9 viewBox (9:16 / 1:1 stills + MP4), the
+  // preview/export cover-crops to the central band, so a full-width
+  // card gets its ends sliced (re-QA 2026-11-05: "THE FIRST NIGHT"
+  // rendered as "E FIRST NIG…" in 9:16). The card shrinks to the
+  // visible width and anchors to the viewBox top for tight cameras.
   if (scene.textCard) {
     const title = scene.textCard.title.toUpperCase();
     const sub = scene.textCard.sub;
-    const titleSize = Math.min(0.85, 7.6 / (title.length * 0.5));
+    const [cX, cY, cW, cH] = viewBox.split(/\s+/).map(Number);
+    const outAspect = width / height;
+    const visibleW = outAspect >= cW / cH ? cW : cH * outAspect;
+    const cardW = Math.min(8.8, visibleW * 0.92);
+    const cx = cX + cW / 2;
+    const cardX = cx - cardW / 2;
+    const cardY = Math.max(-5.6, cY + 0.25);
+    const titleBudget = Math.min(7.6, cardW * 0.86);
+    const titleSize = Math.min(0.85, titleBudget / (title.length * 0.5));
+    const subSize = 0.48 * Math.min(1, cardW / 8.8);
     parts.push(
       `<g>` +
-        `<rect x="-4.4" y="-5.6" width="8.8" height="2.6" rx="0.15" fill="#f0f0e0" stroke="${INK}" stroke-width="0.12"/>` +
-        `<text x="0" y="-4.35" text-anchor="middle" font-family="${HAND_FONT}" font-size="${fmt(titleSize)}" font-weight="bold" fill="${INK}">${escapeXml(title)}</text>` +
+        `<rect x="${fmt(cardX)}" y="${fmt(cardY)}" width="${fmt(cardW)}" height="2.6" rx="0.15" fill="#f0f0e0" stroke="${INK}" stroke-width="0.12"/>` +
+        `<text x="${fmt(cx)}" y="${fmt(cardY + 1.25)}" text-anchor="middle" font-family="${HAND_FONT}" font-size="${fmt(titleSize)}" font-weight="bold" fill="${INK}">${escapeXml(title)}</text>` +
         (sub
-          ? `<text x="0" y="-3.5" text-anchor="middle" font-family="${HAND_FONT}" font-size="0.48" fill="${INK}">${escapeXml(sub)}</text>`
+          ? `<text x="${fmt(cx)}" y="${fmt(cardY + 2.1)}" text-anchor="middle" font-family="${HAND_FONT}" font-size="${fmt(subSize)}" fill="${INK}">${escapeXml(sub)}</text>`
           : "") +
         `</g>`,
     );

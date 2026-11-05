@@ -145,6 +145,30 @@ describe("props, lighting, text card, watermark", () => {
     expect(short).toContain('font-size="0.85"');
   });
 
+  it("text card fits the visible band in 9:16 (regression: re-QA 2026-11-05 — 'THE FIRST NIGHT' clipped to 'E FIRST NIG…')", () => {
+    const { svg } = renderScene(
+      { ...defaultScene(), textCard: { title: "The first night", sub: "Chapter one" } },
+      castMap(),
+      { width: 720, height: 1280 },
+    );
+    // Wide viewBox 16×9 cover-cropped to 9:16 keeps the central
+    // 5.06 units: x in [-2.53, 2.53].
+    const rect = svg.match(/<rect x="([\d.-]+)" y="([\d.-]+)" width="([\d.]+)" height="2.6"/);
+    expect(rect).not.toBeNull();
+    const [, rx, , rw] = rect as unknown as [string, string, string, string];
+    expect(Number(rx)).toBeGreaterThanOrEqual(-2.53);
+    expect(Number(rx) + Number(rw)).toBeLessThanOrEqual(2.53);
+    // Middle-anchored title must fit inside the same band.
+    const title = svg.match(
+      /<text x="([\d.-]+)" y="([\d.-]+)" text-anchor="middle"[^>]*font-size="([\d.]+)"[^>]*>THE FIRST NIGHT<\/text>/,
+    );
+    expect(title).not.toBeNull();
+    const [, tx, , ts] = title as unknown as [string, string, string, string];
+    const estW = "THE FIRST NIGHT".length * 0.5 * Number(ts);
+    expect(Number(tx) - estW / 2).toBeGreaterThanOrEqual(-2.53);
+    expect(Number(tx) + estW / 2).toBeLessThanOrEqual(2.53);
+  });
+
   it("watermark slot is present by default, off when disabled (R20)", () => {
     const on = renderScene({ ...defaultScene(), watermark: true }, castMap()).svg;
     expect(on).toContain("CHARACTER STUDIO");
