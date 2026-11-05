@@ -158,12 +158,18 @@ function fmt(n: number, decimals = 2): string {
 }
 
 function leg(x: number, top: number, bot: number, w: number, col: string, hoof: string, bend: number): string {
+  // Heights are measured UP from the ground, like the rest of this
+  // file (neck() negates too) — the SVG y must be the NEGATIVE of
+  // the height. The first version forgot the minus signs, so the
+  // legs were drawn at +1.45..0 (below the ground line), hanging
+  // detached under the body with the hooves on top (QA 2026-11-05).
   const kx = x + bend;
-  const d = `M${fmt(x)},${fmt(top)} Q${fmt(kx)},${fmt((top + bot) / 2)} ${fmt(kx)},${fmt(bot)}`;
+  const mid = (top + bot) / 2;
+  const d = `M${fmt(x)},${fmt(-top)} Q${fmt(kx)},${fmt(-mid)} ${fmt(kx)},${fmt(-bot)}`;
   return (
     `<path d="${d}" stroke="${INK}" stroke-width="${fmt(w + 0.1)}" fill="none" stroke-linecap="round"/>` +
     `<path d="${d}" stroke="${col}" stroke-width="${fmt(w)}" fill="none" stroke-linecap="round"/>` +
-    `<path d="M${fmt(kx - w * 0.52)},${fmt(bot - 0.06)} h${fmt(w * 1.04)} v0.16 q0,0.08 -0.08,0.08 h${fmt(-w * 0.88)} q-0.08,0 -0.08,-0.08 Z" fill="${hoof}" stroke="${INK}" stroke-width="0.07" stroke-linejoin="round"/>`
+    `<path d="M${fmt(kx - w * 0.52)},${fmt(-bot - 0.06)} h${fmt(w * 1.04)} v0.16 q0,0.08 -0.08,0.08 h${fmt(-w * 0.88)} q-0.08,0 -0.08,-0.08 Z" fill="${hoof}" stroke="${INK}" stroke-width="0.07" stroke-linejoin="round"/>`
   );
 }
 
@@ -216,9 +222,11 @@ export function animalSvg(species: AnimalSpecies, opts: AnimalRenderOpts = {}): 
   const legTop = bodyBottom + 0.25;
 
   // Legs (back pair slightly darker, like the engine's _legs).
+  // Heights are measured UP from the ground: a leg runs from the
+  // body bottom (legTop) down to 0 (the ground) — NOT to legLen.
   const legXs = [-def.bodyRx * 0.55, -def.bodyRx * 0.3, def.bodyRx * 0.45, def.bodyRx * 0.7];
   legXs.forEach((lx, i) => {
-    parts.push(leg(lx, legTop, def.legLen, def.legW, i % 2 === 1 ? def.dark : def.legs, def.hoof, i < 2 ? 0.08 : -0.05));
+    parts.push(leg(lx, legTop, 0, def.legW, i % 2 === 1 ? def.dark : def.legs, def.hoof, i < 2 ? 0.08 : -0.05));
   });
 
   // Tail: a curved line from the rear, with a tuft blob at the end.

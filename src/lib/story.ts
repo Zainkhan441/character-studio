@@ -177,13 +177,16 @@ const KEYWORD_RULES: KeywordRule[] = [
   {
     re: /\b(underground|below the|layers of|soil|buried|digging|dig\b)/i,
     apply: (s) => {
-      s.cutaway = "soil";
+      // A specific cut-away (igloo / house) already named in the
+      // line wins — "buried the camp, but inside the igloo" is an
+      // igloo shot, not a soil shot (QA 2026-11-05).
+      if (!s.cutaway) s.cutaway = "soil";
     },
   },
   {
     re: /\b(inside the house|cut-away|cutaway)\b/i,
     apply: (s) => {
-      s.cutaway = "house";
+      if (!s.cutaway) s.cutaway = "house";
     },
   },
   {
@@ -219,10 +222,18 @@ const KEYWORD_RULES: KeywordRule[] = [
     },
   },
   {
-    re: /\b(travel|walk|journey|migration|road|wander)\b/i,
+    // Verb forms matter: "walked" does not match /\bwalk\b/ (no word
+    // boundary inside "walked"), so list the forms (QA 2026-11-05).
+    re: /\b(travel|travelled|traveling|travels|walk|walked|walking|walks|journey|migration|road|wander|follow|following)\b/i,
     apply: (s) => {
       s.pose = "walk";
       s.background = "savanna";
+    },
+  },
+  {
+    re: /\b(plain|plains|field|grassland|meadow|steppe|herd|herds)\b/i,
+    apply: (s) => {
+      if (!s.cutaway) s.background = "savanna";
     },
   },
   {

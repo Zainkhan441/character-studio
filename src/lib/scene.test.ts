@@ -129,9 +129,29 @@ describe("props, lighting, text card, watermark", () => {
     expect(svg).toContain("Patrick Hand");
   });
 
+  it("long titles shrink to fit inside the card (R19)", () => {
+    // Regression (QA 2026-11-05): "WE NEVER THINK TWICE" at 0.85
+    // spilled past the 8.8-wide card. A 20-char title must render
+    // at ~0.76 (7.6 / 10.0), a short title at the full 0.85.
+    const long = renderScene(
+      { ...defaultScene(), textCard: { title: "We never think twice", sub: "" } },
+      castMap(),
+    ).svg;
+    expect(long).toContain('font-size="0.76"');
+    const short = renderScene(
+      { ...defaultScene(), textCard: { title: "Fire", sub: "" } },
+      castMap(),
+    ).svg;
+    expect(short).toContain('font-size="0.85"');
+  });
+
   it("watermark slot is present by default, off when disabled (R20)", () => {
     const on = renderScene({ ...defaultScene(), watermark: true }, castMap()).svg;
     expect(on).toContain("CHARACTER STUDIO");
+    // The box must be wide enough for the text: it sits at x 5.15
+    // and is 2.6 wide, so it ends at 7.75 — inside the 8.0 frame.
+    expect(on).toContain('translate(5.15,1.15)');
+    expect(on).toContain('width="2.6"');
     const off = renderScene({ ...defaultScene(), watermark: false }, castMap()).svg;
     expect(off).not.toContain("CHARACTER STUDIO");
   });
@@ -164,13 +184,15 @@ describe("camera", () => {
     expect(cameraViewBox(scene)).toBe("-5.00 -5.4 10 5.625");
   });
 
-  it("close-up frames 6 units on the first character", () => {
+  it("close-up frames 6 units on the first character, head clear of the top", () => {
     const scene: Scene = {
       ...defaultScene(),
       camera: "closeup",
       placements: [{ id: "p1", characterId: "cast-arjun", x: 1, scale: 1, flip: false, pose: "stand", expression: "neutral" }],
     };
-    expect(cameraViewBox(scene)).toBe("-2.00 -5.1 6 3.375");
+    // Top is -5.6: a head centre is ~-4.35 with radius 1 and hair
+    // above, so the old -5.1 sliced the hair off (QA 2026-11-05).
+    expect(cameraViewBox(scene)).toBe("-2.00 -5.6 6 3.375");
   });
 });
 

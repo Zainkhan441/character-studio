@@ -114,6 +114,27 @@ describe("suggestScene", () => {
     expect(suggestScene("Inside the igloo, the fire kept them warm.", 0, CAST).cutaway).toBe("igloo");
   });
 
+  it("a named cut-away beats 'buried' — igloo, not soil (QA 2026-11-05)", () => {
+    const s = suggestScene(
+      "The winter snow buried the camp, but inside the igloo the fire kept them warm.",
+      0,
+      CAST,
+    );
+    expect(s.cutaway).toBe("igloo");
+    expect(s.background).toBe("snow");
+  });
+
+  it("'walked across the plain, following the horse herds' is savanna + horse (QA 2026-11-05)", () => {
+    const s = suggestScene(
+      "When morning came, they walked across the plain, following the horse herds for miles.",
+      0,
+      CAST,
+    );
+    expect(s.background).toBe("savanna");
+    expect(s.pose).toBe("walk");
+    expect(s.animal?.species).toBe("horse");
+  });
+
   it("horse lines add a horse", () => {
     const s = suggestScene("The horse carried them across the plain.", 0, CAST);
     expect(s.animal?.species).toBe("horse");
@@ -126,7 +147,9 @@ describe("suggestScene", () => {
   });
 
   it("consecutive plain lines rotate backgrounds so shots never repeat", () => {
-    const bgs = [0, 1, 2, 3].map((i) => suggestScene("They walked on.", i, CAST).background);
+    // "They walked on." is no longer plain — "walked" matches the
+    // travel rule and pins every shot to savanna.
+    const bgs = [0, 1, 2, 3].map((i) => suggestScene("They kept going.", i, CAST).background);
     expect(new Set(bgs).size).toBe(4);
   });
 

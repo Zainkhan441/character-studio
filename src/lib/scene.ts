@@ -420,7 +420,9 @@ function backgroundSvg(bg: BackgroundId, variant: Variant, rng: Rng): string {
         `<path d="M-8,0 H8" stroke="${pal.groundLine}" stroke-width="0.12"/>` +
         `<rect x="-6.2" y="-5.6" width="3.4" height="3.2" fill="${pal.sky}" stroke="${INK}" stroke-width="0.12"/>` +
         `<path d="M-4.5,-5.6 V-2.4 M-6.2,-4.0 H-2.8" stroke="${INK}" stroke-width="0.09"/>` +
-        (variant === "night" ? moon(-5.2, -4.9, pal.sky) : sun(-5.2, -4.9)) +
+        // Sun/moon sit INSIDE the window: sun rays reach 1.0 unit,
+        // so centre (-4.7,-4.5) keeps them within the frame.
+        (variant === "night" ? moon(-5.2, -4.9, pal.sky) : sun(-4.7, -4.5)) +
         `<ellipse cx="0" cy="0.9" rx="3.4" ry="0.5" fill="#b5453a" stroke="${INK}" stroke-width="0.09"/>` +
         `<path d="M-3.4,0.9 q3.4,0.35 6.8,0" stroke="#8a2f28" stroke-width="0.06" fill="none"/>` +
         `<g transform="translate(5.2,0)"><rect x="-1.1" y="-1.5" width="2.2" height="0.18" fill="#7a5a3a" stroke="${INK}" stroke-width="0.08"/><rect x="-0.9" y="-1.32" width="0.14" height="1.32" fill="#5a3d24" stroke="${INK}" stroke-width="0.06"/><rect x="0.76" y="-1.32" width="0.14" height="1.32" fill="#5a3d24" stroke="${INK}" stroke-width="0.06"/><rect x="-0.25" y="-1.85" width="0.5" height="0.35" fill="#c9a24e" stroke="${INK}" stroke-width="0.06"/></g>` +
@@ -593,16 +595,17 @@ function cutawaySvg(cutaway: CutawayId, variant: Variant, rng: Rng): string {
 
   if (cutaway === "igloo") {
     const sky = variant === "night" ? "#0d0d1f" : "#a8d8d8";
+    // Snow-block courses: concentric semicircles centred on the dome
+    // base (0,0), plus radial joints — the same centre as the dome
+    // outline, so no arc ever sticks out above the dome.
     const blocks: string[] = [];
-    for (let r = 0; r < 4; r++) {
-      const ry = -5.4 + r * 1.35;
-      const rad = 5.4 - r * 0.9;
-      blocks.push(`<path d="M${fmt(-rad)},${fmt(ry)} A${fmt(rad)},${fmt(rad)} 0 0,1 ${fmt(rad)},${fmt(ry)}" stroke="#b9c8da" stroke-width="0.09" fill="none"/>`);
+    for (const r of [4.5, 3.6, 2.7, 1.8]) {
+      blocks.push(`<path d="M${fmt(-r)},0 A${fmt(r)},${fmt(r)} 0 0,1 ${fmt(r)},0" stroke="#b9c8da" stroke-width="0.09" fill="none"/>`);
     }
     for (let a = -70; a <= 70; a += 18) {
       const rad = (a * Math.PI) / 180;
       blocks.push(
-        `<path d="M${fmt(Math.sin(rad) * 1.8)},${fmt(-5.4 + (1 - Math.cos(rad)) * 1.8)} L${fmt(Math.sin(rad) * 5.4)},${fmt(-5.4 + (1 - Math.cos(rad)) * 5.4)}" stroke="#b9c8da" stroke-width="0.06" fill="none" opacity="0.7"/>`,
+        `<path d="M${fmt(Math.sin(rad) * 1.8)},${fmt(-Math.cos(rad) * 1.8)} L${fmt(Math.sin(rad) * 5.4)},${fmt(-Math.cos(rad) * 5.4)}" stroke="#b9c8da" stroke-width="0.06" fill="none" opacity="0.7"/>`,
       );
     }
     return (
@@ -627,7 +630,9 @@ function cutawaySvg(cutaway: CutawayId, variant: Variant, rng: Rng): string {
   const sky = variant === "night" ? "#1a2340" : "#a8d8d8";
   return (
     `<rect x="-8" y="-7" width="16" height="9" fill="${sky}"/>` +
-    (variant === "night" ? stars(rng, 24) : sun(6, -5.6)) +
+    (variant === "night"
+      ? stars(rng, 24)
+      : `<ellipse cx="6.6" cy="-6.1" rx="0.8" ry="0.3" fill="#ffffff" opacity="0.9"/><ellipse cx="7.2" cy="-5.9" rx="0.55" ry="0.25" fill="#ffffff" opacity="0.9"/>`) +
     `<rect x="-8" y="0" width="16" height="2" fill="#b09868"/>` +
     // House shell, sliced open on the left: thick cut wall with hatch.
     `<path d="M-6,-5.2 L0,-6.8 L6,-5.2 L6,0 L-6,0 Z" fill="#e8dcc8" stroke="${INK}" stroke-width="0.14" stroke-linejoin="round"/>` +
@@ -754,9 +759,11 @@ export function cameraViewBox(scene: Scene): string {
   if (scene.camera === "medium") {
     return `${fmt(cx - 5)} -5.4 10 5.625`;
   }
-  // close-up: frame the first character's head/shoulders.
+  // close-up: frame the first character's head/shoulders. The frame
+  // top is -5.6, not -5.1: a head centre sits at about -4.35 with
+  // radius 1 and hair above, so -5.1 sliced the hair off (QA 2026-11-05).
   const fx = xs.length > 0 ? xs[0] : 0;
-  return `${fmt(fx - 3)} -5.1 6 3.375`;
+  return `${fmt(fx - 3)} -5.6 6 3.375`;
 }
 
 /* ------------------------------------------------------------------ */
@@ -855,15 +862,20 @@ export function renderScene(
   }
 
   // Text card (R19) — centred cream card, all-caps hand font.
+  // The title font shrinks for long titles so the text never
+  // spills past the card (QA 2026-11-05: "WE NEVER THINK TWICE"
+  // at 0.85 overflowed an 8.8-wide card). Title width budget is
+  // 7.6 units at ~0.5 em per char.
   if (scene.textCard) {
     const title = scene.textCard.title.toUpperCase();
     const sub = scene.textCard.sub;
+    const titleSize = Math.min(0.85, 7.6 / (title.length * 0.5));
     parts.push(
       `<g>` +
-        `<rect x="-4.4" y="-5.7" width="8.8" height="3.1" rx="0.15" fill="#f0f0e0" stroke="${INK}" stroke-width="0.12"/>` +
-        `<text x="0" y="-4.15" text-anchor="middle" font-family="${HAND_FONT}" font-size="0.85" font-weight="bold" fill="${INK}">${escapeXml(title)}</text>` +
+        `<rect x="-4.4" y="-5.6" width="8.8" height="2.6" rx="0.15" fill="#f0f0e0" stroke="${INK}" stroke-width="0.12"/>` +
+        `<text x="0" y="-4.35" text-anchor="middle" font-family="${HAND_FONT}" font-size="${fmt(titleSize)}" font-weight="bold" fill="${INK}">${escapeXml(title)}</text>` +
         (sub
-          ? `<text x="0" y="-3.15" text-anchor="middle" font-family="${HAND_FONT}" font-size="0.48" fill="${INK}">${escapeXml(sub)}</text>`
+          ? `<text x="0" y="-3.5" text-anchor="middle" font-family="${HAND_FONT}" font-size="0.48" fill="${INK}">${escapeXml(sub)}</text>`
           : "") +
         `</g>`,
     );
@@ -879,11 +891,14 @@ export function renderScene(
   }
 
   // Watermark slot (R20): small box, bottom-right, every frame.
+  // The box is 2.6 units wide so "CHARACTER STUDIO" (16 chars at
+  // 0.26 font) fits inside it — the first version used a 1.45 box
+  // and the text spilled past the frame edge (QA 2026-11-05).
   if (scene.watermark) {
     parts.push(
-      `<g transform="translate(6.35,1.15)">` +
-        `<rect x="0" y="0" width="1.45" height="0.55" rx="0.08" fill="#ffffff" opacity="0.88" stroke="${INK}" stroke-width="0.07"/>` +
-        `<text x="0.72" y="0.38" text-anchor="middle" font-family="${HAND_FONT}" font-size="0.3" font-weight="bold" fill="${INK}">CHARACTER STUDIO</text>` +
+      `<g transform="translate(5.15,1.15)">` +
+        `<rect x="0" y="0" width="2.6" height="0.55" rx="0.08" fill="#ffffff" opacity="0.88" stroke="${INK}" stroke-width="0.07"/>` +
+        `<text x="1.3" y="0.37" text-anchor="middle" font-family="${HAND_FONT}" font-size="0.26" font-weight="bold" fill="${INK}">CHARACTER STUDIO</text>` +
         `</g>`,
     );
   }
