@@ -59,13 +59,18 @@ export default function AppShell({
               })}
             </ul>
           </nav>
-          <div className="ml-auto flex shrink-0 items-center gap-2">
+          {/* The action cluster scrolls internally instead of widening
+              the page: on a 375px phone the creator toolbar (Undo /
+              Redo / zoom / Download …) plus this button is far wider
+              than the viewport, and it used to push the whole document
+              to 500–633px wide (QA 2026-11-05). */}
+          <div className="flex min-w-0 items-center gap-2 overflow-x-auto">
             {actions}
             <a
               href="/import"
-              className="whitespace-nowrap rounded-md border border-neutral-900 px-3 py-1.5 text-sm font-medium hover:bg-neutral-100"
+              className="shrink-0 whitespace-nowrap rounded-md border border-neutral-900 px-3 py-1.5 text-sm font-medium hover:bg-neutral-100"
             >
-              ＋ Add your own character
+              ＋<span className="hidden sm:inline"> Add your own character</span>
             </a>
           </div>
         </div>

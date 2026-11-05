@@ -148,12 +148,28 @@ describe("props, lighting, text card, watermark", () => {
   it("watermark slot is present by default, off when disabled (R20)", () => {
     const on = renderScene({ ...defaultScene(), watermark: true }, castMap()).svg;
     expect(on).toContain("CHARACTER STUDIO");
-    // The box must be wide enough for the text: it sits at x 5.15
-    // and is 2.6 wide, so it ends at 7.75 — inside the 8.0 frame.
-    expect(on).toContain('translate(5.15,1.15)');
-    expect(on).toContain('width="2.6"');
+    // Wide frame: the box is 2.6 wide and ends 0.15 inside the 8.0
+    // frame edge (x 5.25 + 2.6 = 7.85 < 8). fmt() pads to 2 decimals.
+    expect(on).toContain('translate(5.25,1.30)');
+    expect(on).toContain('width="2.60"');
     const off = renderScene({ ...defaultScene(), watermark: false }, castMap()).svg;
     expect(off).not.toContain("CHARACTER STUDIO");
+  });
+
+  it("watermark stays inside the visible frame for every camera (regression: QA 2026-11-05 — fixed wide coords clipped to 'HARACTER STUDIO' on medium/close-up)", () => {
+    for (const camera of ["wide", "medium", "closeup"] as const) {
+      const scene = { ...defaultScene(), camera, watermark: true };
+      const { svg } = renderScene(scene, castMap());
+      const vb = cameraViewBox(scene).split(/\s+/).map(Number);
+      const m = svg.match(/<g transform="translate\(([\d.-]+),([\d.-]+)\)"><rect x="0" y="0" width="([\d.]+)" height="([\d.]+)"/);
+      expect(m).not.toBeNull();
+      const [, wx, wy, ww, wh] = m as unknown as [string, string, string, string, string];
+      expect(Number(wx)).toBeGreaterThanOrEqual(vb[0]);
+      expect(Number(wy)).toBeGreaterThanOrEqual(vb[1]);
+      expect(Number(wx) + Number(ww)).toBeLessThanOrEqual(vb[0] + vb[2]);
+      expect(Number(wy) + Number(wh)).toBeLessThanOrEqual(vb[1] + vb[3]);
+      expect(svg).toContain("CHARACTER STUDIO");
+    }
   });
 
   it("name labels draw the cast name under the feet", () => {

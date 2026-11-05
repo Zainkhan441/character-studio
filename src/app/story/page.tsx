@@ -414,7 +414,9 @@ export default function StoryPage() {
       for (const shot of board.shots) {
         const scene = shotToScene(shot, 7);
         const { svg } = renderScene(scene, castMap, { width: thumbSize.width, height: thumbSize.height });
-        out.set(shot.id, svg);
+        // Same slice-crop as the /scenes preview: the viewBox is
+        // always 16:9, so 9:16/1:1 stills must crop, not letterbox.
+        out.set(shot.id, svg.replace("<svg ", '<svg preserveAspectRatio="xMidYMid slice" '));
       }
       setRenderError(null);
     } catch (err) {
@@ -1058,11 +1060,14 @@ export default function StoryPage() {
                     onClick={() => setSelectedId(shot.id)}
                     className={`cursor-pointer rounded-xl border p-3 ${selectedId === shot.id ? "border-neutral-900 ring-1 ring-neutral-900" : "border-neutral-200 hover:border-neutral-400"} ${dragId === shot.id ? "opacity-50" : ""}`}
                   >
-                    <div className="overflow-hidden rounded-lg border border-neutral-100 [&_svg]:block [&_svg]:h-auto [&_svg]:w-full">
+                    <div
+                      className="overflow-hidden rounded-lg border border-neutral-100 [&_svg]:block [&_svg]:h-full [&_svg]:w-full"
+                      style={{ aspectRatio: `${thumbSize.width} / ${thumbSize.height}` }}
+                    >
                       {thumbs.get(shot.id) ? (
-                        <span dangerouslySetInnerHTML={{ __html: thumbs.get(shot.id) as string }} />
+                        <span className="block h-full w-full" dangerouslySetInnerHTML={{ __html: thumbs.get(shot.id) as string }} />
                       ) : (
-                        <div className="flex aspect-video items-center justify-center bg-neutral-100 text-xs text-neutral-400">No preview</div>
+                        <div className="flex h-full w-full items-center justify-center bg-neutral-100 text-xs text-neutral-400">No preview</div>
                       )}
                     </div>
                     <div className="mt-2 flex items-start justify-between gap-2">
@@ -1087,13 +1092,13 @@ export default function StoryPage() {
                           min={MIN_DURATION_SEC}
                           max={MAX_DURATION_SEC}
                           step={0.5}
-                          value={shot.durationSec}
+                          value={shot.durationSec.toFixed(1)}
                           onChange={(e) => {
                             const v = parseFloat(e.target.value);
                             if (!Number.isNaN(v)) updateDuration(shot.id, v);
                           }}
                           aria-label={`Duration of shot ${i + 1} in seconds`}
-                          className="w-12 bg-transparent text-right text-xs outline-none"
+                          className="w-16 bg-transparent text-right text-xs outline-none"
                         />
                         <span>s</span>
                       </label>

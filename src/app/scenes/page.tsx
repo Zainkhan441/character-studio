@@ -219,6 +219,15 @@ export default function ScenesPage() {
     }
   }, [scene, castMap, aspect]);
 
+  // Preview must crop like the export does: the scene viewBox is
+  // always 16:9, so a 9:16/1:1 preview letterboxed the still into a
+  // band while the MP4 export cropped vertically (QA 2026-11-05).
+  // slice + the aspect-ratio container = true WYSIWYG.
+  const previewSvg = useMemo(
+    () => rendered.svg.replace("<svg ", '<svg preserveAspectRatio="xMidYMid slice" '),
+    [rendered.svg],
+  );
+
   const applyPreset = useCallback(
     (preset: (typeof SCENE_PRESETS)[number]) => {
       update(preset.patch);
@@ -392,8 +401,11 @@ export default function ScenesPage() {
               This scene could not be rendered: {renderError}
             </div>
           ) : (
-            <div className="mt-3 overflow-hidden rounded-xl border border-neutral-200 [&_svg]:block [&_svg]:h-auto [&_svg]:w-full">
-              <span dangerouslySetInnerHTML={{ __html: rendered.svg }} />
+            <div
+              className="mt-3 overflow-hidden rounded-xl border border-neutral-200 [&_svg]:block [&_svg]:h-full [&_svg]:w-full"
+              style={{ aspectRatio: `${ASPECT_SIZES[aspect].width} / ${ASPECT_SIZES[aspect].height}` }}
+            >
+              <span className="block h-full w-full" dangerouslySetInnerHTML={{ __html: previewSvg }} />
             </div>
           )}
           <p className="mt-2 text-xs text-neutral-500">

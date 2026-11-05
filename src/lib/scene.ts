@@ -891,14 +891,23 @@ export function renderScene(
   }
 
   // Watermark slot (R20): small box, bottom-right, every frame.
-  // The box is 2.6 units wide so "CHARACTER STUDIO" (16 chars at
-  // 0.26 font) fits inside it — the first version used a 1.45 box
-  // and the text spilled past the frame edge (QA 2026-11-05).
+  // Positioned relative to the CURRENT camera viewBox, not in
+  // absolute wide-camera coordinates: the old fixed translate
+  // (5.15, 1.15) sat outside the frame on medium/close-up cameras
+  // (their viewBoxes end at x=5 / y=0.2) and clipped to
+  // "HARACTER STUDIO" (QA 2026-11-05). Size scales with the
+  // viewBox width so it reads the same in every framing.
   if (scene.watermark) {
+    const [vbX, vbY, vbW, vbH] = viewBox.split(/\s+/).map(Number);
+    const wScale = vbW / 16;
+    const boxW = 2.6 * wScale;
+    const boxH = 0.55 * wScale;
+    const wx = vbX + vbW - boxW - 0.15 * wScale;
+    const wy = vbY + vbH - boxH - 0.15 * wScale;
     parts.push(
-      `<g transform="translate(5.15,1.15)">` +
-        `<rect x="0" y="0" width="2.6" height="0.55" rx="0.08" fill="#ffffff" opacity="0.88" stroke="${INK}" stroke-width="0.07"/>` +
-        `<text x="1.3" y="0.37" text-anchor="middle" font-family="${HAND_FONT}" font-size="0.26" font-weight="bold" fill="${INK}">CHARACTER STUDIO</text>` +
+      `<g transform="translate(${fmt(wx)},${fmt(wy)})">` +
+        `<rect x="0" y="0" width="${fmt(boxW)}" height="${fmt(boxH)}" rx="${fmt(0.08 * wScale)}" fill="#ffffff" opacity="0.88" stroke="${INK}" stroke-width="${fmt(0.07 * wScale)}"/>` +
+        `<text x="${fmt(boxW / 2)}" y="${fmt(boxH * 0.67)}" text-anchor="middle" font-family="${HAND_FONT}" font-size="${fmt(0.26 * wScale)}" font-weight="bold" fill="${INK}">CHARACTER STUDIO</text>` +
         `</g>`,
     );
   }

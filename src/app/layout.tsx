@@ -5,6 +5,7 @@ export const metadata: Metadata = {
   title: "Character Studio",
   description:
     "Character-consistent animation studio for faceless YouTube channels. A character is data, not a picture.",
+  icons: { icon: "/favicon.svg" },
 };
 
 export default function RootLayout({

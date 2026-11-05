@@ -109,7 +109,9 @@ export function renderThumbnailSvg(opts: ThumbnailOpts): string {
         {
           id: "thumb-char",
           characterId: opts.character.id,
-          x: -2.5,
+          // Right side: the title owns the left (bottom-left variant)
+          // or the centre (top/bottom-centre variants).
+          x: 2.5,
           scale: 1.15,
           flip: false,
           pose: opts.pose,
@@ -121,18 +123,31 @@ export function renderThumbnailSvg(opts: ThumbnailOpts): string {
   if (opts.character) characters.set(opts.character.id, opts.character);
   const { svg } = renderScene(scene, characters, { width: THUMBNAIL_WIDTH, height: THUMBNAIL_HEIGHT });
 
+  // The scene SVG lives in scene units (wide viewBox "-8 -7 16 9"),
+  // but the variant layout is authored in 1280×720 pixels. Convert
+  // px → viewBox units, or the title renders thousands of px
+  // off-canvas and never appears (QA 2026-11-05 — the blocker).
+  const vbMatch = svg.match(/viewBox="([^"]+)"/);
+  const [vbX, vbY, vbW, vbH] = vbMatch
+    ? vbMatch[1].split(/\s+/).map(Number)
+    : [-8, -7, 16, 9];
+  const px = (x: number) => vbX + (x / THUMBNAIL_WIDTH) * vbW;
+  const py = (y: number) => vbY + (y / THUMBNAIL_HEIGHT) * vbH;
+  const fs = (n: number) => (n / THUMBNAIL_HEIGHT) * vbH;
+  const f2 = (n: number) => (Math.round(n * 100) / 100).toString();
+
   const lines = splitTitle(opts.title || "UNTITLED");
   const lineHeight = variant.textSize * 1.05;
   const startY = variant.textY - (lines.length - 1) * lineHeight;
   const titleText = lines
     .map(
       (line, i) =>
-        `<text x="${variant.textX}" y="${Math.round(startY + i * lineHeight)}" text-anchor="${variant.align}" font-family="'Patrick Hand', 'Kalam', 'Comic Sans MS', cursive" font-size="${variant.textSize}" font-weight="bold" fill="${THUMBNAIL_YELLOW}" stroke="#211c19" stroke-width="${Math.round(variant.textSize * 0.16)}" paint-order="stroke" stroke-linejoin="round">${escapeXml(line)}</text>`,
+        `<text x="${f2(px(variant.textX))}" y="${f2(py(Math.round(startY + i * lineHeight)))}" text-anchor="${variant.align}" font-family="'Patrick Hand', 'Kalam', 'Comic Sans MS', cursive" font-size="${f2(fs(variant.textSize))}" font-weight="bold" fill="${THUMBNAIL_YELLOW}" stroke="#211c19" stroke-width="${f2(fs(variant.textSize * 0.16))}" paint-order="stroke" stroke-linejoin="round">${escapeXml(line)}</text>`,
     )
     .join("");
   const subText =
     opts.sub && variant.subSize > 0
-      ? `<text x="${variant.textX}" y="${Math.round(variant.textY + variant.subSize + 14)}" text-anchor="${variant.align}" font-family="'Patrick Hand', 'Kalam', 'Comic Sans MS', cursive" font-size="${variant.subSize}" font-weight="bold" fill="#ffffff" stroke="#211c19" stroke-width="${Math.round(variant.subSize * 0.16)}" paint-order="stroke" stroke-linejoin="round">${escapeXml(opts.sub.toUpperCase())}</text>`
+      ? `<text x="${f2(px(variant.textX))}" y="${f2(py(Math.round(variant.textY + variant.subSize + 14)))}" text-anchor="${variant.align}" font-family="'Patrick Hand', 'Kalam', 'Comic Sans MS', cursive" font-size="${f2(fs(variant.subSize))}" font-weight="bold" fill="#ffffff" stroke="#211c19" stroke-width="${f2(fs(variant.subSize * 0.16))}" paint-order="stroke" stroke-linejoin="round">${escapeXml(opts.sub.toUpperCase())}</text>`
       : "";
   const overlay = `<g>${titleText}${subText}</g>`;
   return svg.replace("</svg>", `${overlay}</svg>`);

@@ -133,6 +133,38 @@ describe("renderThumbnailSvg", () => {
     );
     expect(new Set(svgs).size).toBe(3);
   });
+
+  it("keeps every title/sub <text> inside the scene viewBox (regression: QA 2026-11-05 — pixel coords rendered the title ~21,000px off-canvas)", () => {
+    // Wide viewBox is "-8 -7 16 9": x in [-8, 8], y in [-7, 2].
+    const vb = { x: -8, y: -7, w: 16, h: 9 };
+    for (const v of THUMBNAIL_VARIANTS) {
+      const svg = renderThumbnailSvg({
+        character: arjun,
+        pose: "stand",
+        expression: "neutral",
+        background: "hut",
+        variant: "dusk",
+        title: "FIRE STORM",
+        sub: "the first night",
+        variantId: v.id,
+      });
+      const texts = [...svg.matchAll(/<text x="([\d.-]+)" y="([\d.-]+)"[^>]*font-size="([\d.]+)"/g)];
+      // At least the title line(s) must be present and on-canvas.
+      expect(texts.length).toBeGreaterThan(0);
+      for (const [, x, y, size] of texts) {
+        const nx = Number(x);
+        const ny = Number(y);
+        const ns = Number(size);
+        expect(nx).toBeGreaterThanOrEqual(vb.x);
+        expect(nx).toBeLessThanOrEqual(vb.x + vb.w);
+        expect(ny).toBeGreaterThanOrEqual(vb.y);
+        expect(ny).toBeLessThanOrEqual(vb.y + vb.h);
+        // Font size in scene units, not pixels (150px would be off-canvas).
+        expect(ns).toBeGreaterThan(0.2);
+        expect(ns).toBeLessThan(4);
+      }
+    }
+  });
 });
 
 describe("aspectRatioToSize", () => {
