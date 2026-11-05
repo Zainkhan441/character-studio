@@ -117,6 +117,9 @@ export default function CastPage() {
           >
             Reset to starters
           </button>
+          <a href="/import" className="rounded-md border border-neutral-900 bg-white px-3 py-1.5 text-sm font-medium text-neutral-900 hover:bg-neutral-100">
+            ＋ Add your own character
+          </a>
           <a href="/creator" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-700">
             + New character
           </a>
@@ -136,7 +139,8 @@ export default function CastPage() {
         <h1 className="text-2xl font-bold tracking-tight">Your cast</h1>
         <p className="mt-1 text-sm text-neutral-600">
           {cast.length} character{cast.length === 1 ? "" : "s"}. Each one is data — the same character renders
-          identically in every pose, outfit and scene.
+          identically in every pose, outfit and scene. Got your own cartoon?{" "}
+          <a href="/import" className="font-medium text-neutral-900 underline">Add your own character →</a>
         </p>
 
         <div className="mt-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">

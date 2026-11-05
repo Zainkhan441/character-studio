@@ -253,7 +253,22 @@ describe("R7 — hair never covers the eyes or the brow line", () => {
   // Only FRONT hair counts: paths after the head fill ellipse in
   // document order (back hair is drawn before the head and is mostly
   // occluded by it — counting it was a false positive).
-  const styles: HairStyle[] = ["ragged", "short", "spiky", "messy", "shaggy", "wavy", "long"];
+  // All 12 drawable styles (M3 audit, 2026-11-05): "none" draws
+  // nothing, every other style must keep the eye zone open.
+  const styles: HairStyle[] = [
+    "ragged",
+    "short",
+    "spiky",
+    "spiky_long",
+    "messy",
+    "wild",
+    "mop",
+    "shaggy",
+    "wavy",
+    "long",
+    "bun",
+    "beard",
+  ];
   it.each(styles)("hair style %s keeps the eye zone open", (style) => {
     const base = defaultCharacter();
     const c: Character = {

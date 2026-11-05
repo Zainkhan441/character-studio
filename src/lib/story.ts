@@ -118,6 +118,8 @@ export interface ShotScene {
   props: ShotProp[];
   animal: { species: AnimalSpecies; x: number; scale: number } | null;
   textCard: { title: string; sub: string } | null;
+  /** Plain-English why this scene was chosen (one line). */
+  reason: string;
 }
 
 export interface Shot {
@@ -147,6 +149,13 @@ const ROTATION_BACKGROUNDS: BackgroundId[] = [
 interface KeywordRule {
   re: RegExp;
   apply: (s: ShotScene) => void;
+  /**
+   * Optional note for the reason line when the rule matches but
+   * changes nothing — the line names something with no matching
+   * background / pose / prop in the vocab, so the reader can see
+   * the gap instead of guessing.
+   */
+  note?: string;
 }
 
 const KEYWORD_RULES: KeywordRule[] = [
@@ -154,6 +163,20 @@ const KEYWORD_RULES: KeywordRule[] = [
     re: /\b(night|dark|stars|moon|midnight|evening)\b/i,
     apply: (s) => {
       s.variant = "night";
+    },
+  },
+  {
+    re: /\b(dusk|sunset|sunsets|twilight)\b/i,
+    apply: (s) => {
+      s.variant = "dusk";
+    },
+  },
+  {
+    // Morning is the default variant, but an explicit dawn/morning
+    // beats an earlier night match ("the night turned to dawn").
+    re: /\b(morning|dawn|sunrise|daybreak|noon|midday)\b/i,
+    apply: (s) => {
+      s.variant = "day";
     },
   },
   {
@@ -190,7 +213,7 @@ const KEYWORD_RULES: KeywordRule[] = [
     },
   },
   {
-    re: /\b(fire|flame|burn|hearth|bonfire|campfire)\b/i,
+    re: /\b(fire|flame|flames|burn|hearth|bonfire|campfire)\b/i,
     apply: (s) => {
       s.lighting = "fire";
       if (!s.props.some((p) => p.prop === "fire")) s.props.push({ prop: "fire", x: 3.2, scale: 1 });
@@ -214,7 +237,7 @@ const KEYWORD_RULES: KeywordRule[] = [
     },
   },
   {
-    re: /\b(war|battle|fight|soldier|army|attack)\b/i,
+    re: /\b(war|battle|battlefield|fight|fought|soldier|soldiers|army|attack|sword|swords|shield)\b/i,
     apply: (s) => {
       s.background = "forest";
       s.pose = "aim";
@@ -224,7 +247,7 @@ const KEYWORD_RULES: KeywordRule[] = [
   {
     // Verb forms matter: "walked" does not match /\bwalk\b/ (no word
     // boundary inside "walked"), so list the forms (QA 2026-11-05).
-    re: /\b(travel|travelled|traveling|travels|walk|walked|walking|walks|journey|migration|road|wander|follow|following)\b/i,
+    re: /\b(travel|travelled|travelling|traveling|travels|walk|walked|walking|walks|journey|migration|road|wander|follow|following)\b/i,
     apply: (s) => {
       s.pose = "walk";
       s.background = "savanna";
@@ -237,14 +260,71 @@ const KEYWORD_RULES: KeywordRule[] = [
     },
   },
   {
-    re: /\b(sleep|dream|bed|tired|rest)\b/i,
+    // Named locations run AFTER the travel rule, so "walked through
+    // the forest" is a forest, not the travel rule's savanna.
+    re: /\b(forest|woods|jungle|trees|tree|pine)\b/i,
+    apply: (s) => {
+      s.background = "forest";
+    },
+  },
+  {
+    re: /\b(desert|sand|dune|dunes|oasis)\b/i,
+    apply: (s) => {
+      s.background = "desert";
+    },
+  },
+  {
+    re: /\b(village|market|town|settlement)\b/i,
+    apply: (s) => {
+      s.background = "village";
+    },
+  },
+  {
+    re: /\b(temple|shrine|altar)\b/i,
+    apply: (s) => {
+      s.background = "city";
+    },
+  },
+  {
+    // No river / mountain / boat in the 11-background vocab, and no
+    // climb / swim pose in the 21-pose vocab — say so in the reason
+    // instead of silently picking a wrong scene.
+    re: /\b(river|stream|lake|sea|ocean|shore|beach)\b/i,
+    apply: () => {
+      /* no matching background — keep the rotation pick */
+    },
+    note: "river/sea has no matching background in the 11-background vocab — kept the rotated background",
+  },
+  {
+    re: /\b(mountain|mountains|peak|peaks|cliff|valley)\b/i,
+    apply: () => {
+      /* no matching background — keep the rotation pick */
+    },
+    note: "mountain has no matching background in the 11-background vocab — kept the rotated background",
+  },
+  {
+    re: /\b(boat|ship|raft|canoe)\b/i,
+    apply: () => {
+      /* no boat prop in the vocab */
+    },
+    note: "boat has no matching prop in the vocab — no prop added",
+  },
+  {
+    re: /\b(climb|climbed|climbing|climbs|swim|swam|swimming|swims)\b/i,
+    apply: () => {
+      /* no climb / swim pose in the 21-pose vocab */
+    },
+    note: "climb/swim has no matching pose in the 21-pose vocab — kept the current pose",
+  },
+  {
+    re: /\b(sleep|slept|sleeping|sleeps|dream|dreamed|dreaming|dreams|bed|tired|rest)\b/i,
     apply: (s) => {
       s.pose = "lie";
       s.variant = "night";
     },
   },
   {
-    re: /\b(think|wonder|question|why|idea|realise|realize)\b/i,
+    re: /\b(think|thinks|thinking|thought|wonder|wondered|wondering|question|why|idea|realise|realize)\b/i,
     apply: (s) => {
       s.pose = "think";
       s.expression = "thinking";
@@ -260,19 +340,75 @@ const KEYWORD_RULES: KeywordRule[] = [
   {
     re: /\b(hunt|spear|mammoth|animal|deer|prey)\b/i,
     apply: (s) => {
+      // Pose only now: the old savanna pin overrode a named location
+      // ("hunted in the forest" became savanna). The plain/forest /
+      // desert rules own the background.
       s.pose = "aim";
-      s.background = "savanna";
     },
   },
   {
-    re: /\b(food|eat|meat|cook|meal|hungry)\b/i,
+    re: /\b(food|eat|eats|eating|ate|meat|cook|cooks|cooked|cooking|meal|hungry)\b/i,
     apply: (s) => {
       s.pose = "hold";
       if (!s.props.some((p) => p.prop === "basket")) s.props.push({ prop: "basket", x: 3.0, scale: 1 });
     },
   },
   {
-    re: /\b(happy|laugh|celebrat|cheer|win)\b/i,
+    re: /\b(book|scroll|letter|tablet)\b/i,
+    apply: (s) => {
+      s.pose = "hold";
+    },
+  },
+  {
+    re: /\b(run|ran|running|runs|fled|flee|chase|chased|escape|escaped)\b/i,
+    apply: (s) => {
+      s.pose = "run";
+    },
+  },
+  {
+    re: /\b(sit|sat|sitting|seated)\b/i,
+    apply: (s) => {
+      s.pose = "sit";
+    },
+  },
+  {
+    re: /\b(dig|digging|dug)\b/i,
+    apply: (s) => {
+      s.pose = "dig";
+    },
+  },
+  {
+    re: /\b(throw|threw|throwing|throws|hurled)\b/i,
+    apply: (s) => {
+      s.pose = "throw";
+    },
+  },
+  {
+    re: /\b(kneel|knelt|kneeling)\b/i,
+    apply: (s) => {
+      s.pose = "kneel";
+    },
+  },
+  {
+    re: /\b(wave|waved|waving|greet|greeted)\b/i,
+    apply: (s) => {
+      s.pose = "wave";
+    },
+  },
+  {
+    re: /\b(hug|hugged|embrace|embraced)\b/i,
+    apply: (s) => {
+      s.pose = "hug";
+    },
+  },
+  {
+    re: /\b(shrug|shrugged)\b/i,
+    apply: (s) => {
+      s.pose = "shrug";
+    },
+  },
+  {
+    re: /\b(happy|laugh|celebrat|cheer|win|proud|proudly|triumph|victory)\b/i,
     apply: (s) => {
       s.pose = "cheer";
       s.expression = "happy";
@@ -283,6 +419,36 @@ const KEYWORD_RULES: KeywordRule[] = [
     apply: (s) => {
       s.pose = "sad";
       s.expression = "sad";
+    },
+  },
+  {
+    re: /\b(afraid|scared|fear|frightened|terrified)\b/i,
+    apply: (s) => {
+      s.expression = "scared";
+    },
+  },
+  {
+    re: /\b(worried|worry|anxious|nervous|uneasy)\b/i,
+    apply: (s) => {
+      s.expression = "worried";
+    },
+  },
+  {
+    re: /\b(surprised|surprise|amazed|astonished|shocked)\b/i,
+    apply: (s) => {
+      s.expression = "surprised";
+    },
+  },
+  {
+    re: /\b(angry|furious|rage|raged)\b/i,
+    apply: (s) => {
+      s.expression = "angry";
+    },
+  },
+  {
+    re: /\b(sleepy|exhausted)\b/i,
+    apply: (s) => {
+      s.expression = "sleepy";
     },
   },
   {
@@ -309,15 +475,118 @@ const KEYWORD_RULES: KeywordRule[] = [
       s.animal = { species: "dog", x: 3.4, scale: 0.8 };
     },
   },
+  {
+    re: /\b(torch)\b/i,
+    apply: (s) => {
+      s.lighting = "fire";
+      if (!s.props.some((p) => p.prop === "torch")) s.props.push({ prop: "torch", x: 3.2, scale: 1 });
+    },
+  },
+  {
+    re: /\b(lamp)\b/i,
+    apply: (s) => {
+      s.lighting = "lamp";
+      if (!s.props.some((p) => p.prop === "lamp")) s.props.push({ prop: "lamp", x: 3.2, scale: 1 });
+    },
+  },
+  {
+    re: /\b(rock|stone|boulder)\b/i,
+    apply: (s) => {
+      if (!s.props.some((p) => p.prop === "rock")) s.props.push({ prop: "rock", x: 3.4, scale: 1 });
+    },
+  },
+  {
+    re: /\b(clock)\b/i,
+    apply: (s) => {
+      if (!s.props.some((p) => p.prop === "clock")) s.props.push({ prop: "clock", x: 3.4, scale: 1 });
+    },
+  },
+  {
+    re: /\b(map)\b/i,
+    apply: (s) => {
+      if (!s.props.some((p) => p.prop === "mapPin")) s.props.push({ prop: "mapPin", x: 3.4, scale: 1 });
+    },
+  },
 ];
+
+export interface DialogueInfo {
+  /** Speaker name when the line starts with "Name: ...", else null. */
+  speaker: string | null;
+}
+
+/**
+ * Dialogue lines: `Name: "..."` or a line starting with a quote.
+ * A bare "Name:" + spoken sentence (quoted, or ending in sentence
+ * punctuation) is dialogue; "Fire: The First Night" is not — no
+ * quotes, no sentence end, so it stays a title card.
+ */
+export function parseDialogue(line: string): DialogueInfo | null {
+  const t = line.trim();
+  const named = /^([A-Z][A-Za-z]{1,19}):\s+/.exec(t);
+  if (named) {
+    const rest = t.slice(named[0].length);
+    if (/^["“]/.test(rest) || /[.!?]["”]?$/.test(rest)) return { speaker: named[1] };
+    return null;
+  }
+  if (/^["“]/.test(t)) return { speaker: null };
+  return null;
+}
+
+/** One-line plain-English summary of a scene's choices. */
+function describeScene(s: ShotScene): string {
+  const parts = [
+    `${s.background} background`,
+    `${s.variant} variant`,
+    `${s.pose} pose`,
+    `${s.expression} expression`,
+  ];
+  if (s.lighting !== "none") parts.push(`${s.lighting} lighting`);
+  if (s.cutaway) parts.push(`${s.cutaway} cut-away`);
+  for (const p of s.props) parts.push(`${p.prop} prop`);
+  if (s.animal) parts.push(`${s.animal.species} animal`);
+  if (s.camera === "closeup") parts.push("close-up camera");
+  return parts.join(", ");
+}
+
+/**
+ * Build the reason line: what the line mentioned, what gaps were
+ * found (no matching vocab), and what scene that produced — so a
+ * wrong match is obvious and fixable in one click.
+ */
+function buildReason(
+  matchedWords: string[],
+  notes: string[],
+  dialogue: DialogueInfo | null,
+  s: ShotScene,
+): string {
+  const clauses: string[] = [];
+  if (dialogue) {
+    clauses.push(`dialogue${dialogue.speaker ? ` (${dialogue.speaker} speaking)` : ""} — speaker on camera`);
+  }
+  if (matchedWords.length > 0) {
+    clauses.push(`mentions ${matchedWords.map((w) => `"${w}"`).join(", ")}`);
+  } else if (!dialogue) {
+    clauses.push("no strong keyword match — rotated for variety");
+  }
+  for (const n of notes) clauses.push(n);
+  return `${clauses.join("; ")} → ${describeScene(s)}`;
+}
+
+interface SceneSuggestion {
+  scene: ShotScene;
+  matchedWords: string[];
+  notes: string[];
+  dialogue: DialogueInfo | null;
+}
 
 /**
  * Suggest a scene for one narration line. Deterministic: the same
- * line + index + cast always suggests the same scene. Keyword rules
- * win; otherwise the background rotates so consecutive shots never
+ * line + index + cast always suggests the same scene. Semantic
+ * rules win (location, action, emotion, time, objects, dialogue);
+ * otherwise the background rotates so consecutive shots never
  * look identical.
  */
-export function suggestScene(line: string, index: number, castIds: string[]): ShotScene {
+function suggestSceneParts(line: string, index: number, castIds: string[]): SceneSuggestion {
   const s: ShotScene = {
     background: ROTATION_BACKGROUNDS[index % ROTATION_BACKGROUNDS.length],
     variant: "day",
@@ -330,23 +599,48 @@ export function suggestScene(line: string, index: number, castIds: string[]): Sh
     props: [],
     animal: null,
     textCard: null,
+    reason: "",
   };
-  if (isTitleCard(line)) {
+  const dialogue = parseDialogue(line);
+  if (isTitleCard(line) && !dialogue) {
     s.textCard = { title: line.replace(/:$/, ""), sub: "" };
     s.background = "modern";
     s.camera = "wide";
     s.characterId = null;
-    return s;
+    s.reason = `Title card "${s.textCard.title}" → text-card shot, no character, modern background`;
+    return { scene: s, matchedWords: [], notes: [], dialogue: null };
   }
+  const matchedWords: string[] = [];
+  const notes: string[] = [];
   for (const rule of KEYWORD_RULES) {
-    if (rule.re.test(line)) rule.apply(s);
+    const m = line.match(rule.re);
+    if (m) {
+      rule.apply(s);
+      const w = m[0].toLowerCase();
+      if (!matchedWords.includes(w)) matchedWords.push(w);
+      if (rule.note) notes.push(rule.note);
+    }
   }
-  return s;
+  if (dialogue) {
+    // Dialogue is spoken by someone on screen: closer camera, and
+    // the point pose (the closest thing to a talking pose in the
+    // 21-pose vocab — the style guide's talking shot is a still
+    // with motion lines by the head, not a moving mouth).
+    s.camera = "closeup";
+    s.pose = "point";
+  }
+  s.reason = buildReason(matchedWords, notes, dialogue, s);
+  return { scene: s, matchedWords, notes, dialogue };
+}
+
+export function suggestScene(line: string, index: number, castIds: string[]): ShotScene {
+  return suggestSceneParts(line, index, castIds).scene;
 }
 
 /** Split a line into one or two shots (long lines => two shots). */
 export function lineToShots(line: string, index: number, castIds: string[]): Shot[] {
-  const base = suggestScene(line, index, castIds);
+  const parts = suggestSceneParts(line, index, castIds);
+  const base = parts.scene;
   const split = splitLine(line);
   if (!split) {
     return [
@@ -376,6 +670,9 @@ export function lineToShots(line: string, index: number, castIds: string[]): Sho
     props: base.props.map((p) => ({ ...p })),
     textCard: base.textCard ? { ...base.textCard } : null,
   };
+  // The reason describes the actual scene, so recompute it for the
+  // part-2 framing (its camera — and sometimes background — differ).
+  secondScene.reason = buildReason(parts.matchedWords, parts.notes, parts.dialogue, secondScene);
   return [
     { id: `shot-${index}-1`, text: first, part: 1, ofParts: 2, durationSec: secondsForText(first), scene: base },
     { id: `shot-${index}-2`, text: second, part: 2, ofParts: 2, durationSec: secondsForText(second), scene: secondScene },

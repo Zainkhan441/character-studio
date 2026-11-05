@@ -541,6 +541,9 @@ export default function CreatorPage() {
           <a href="/cast" className="hidden rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-200 sm:inline">
             Cast →
           </a>
+          <a href="/import" className="hidden rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-medium text-neutral-700 hover:bg-neutral-200 sm:inline" title="Upload a cartoon picture and extract a character from it">
+            ＋ Add your own character
+          </a>
         </div>
         <div className="flex items-center gap-2">
           <span className="hidden text-xs text-neutral-500 md:inline" title="Autosave status">

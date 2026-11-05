@@ -26,6 +26,27 @@ import {
   type Shot,
   type Storyboard,
 } from "@/lib/story";
+import {
+  buildNarrationTimeline,
+  DEFAULT_VOICE,
+  loadVoice,
+  pcmToWav,
+  retimeBoard,
+  synthesizeLine,
+  VOICE_OPTIONS,
+  VoiceError,
+  type VoiceClip,
+  type VoiceId,
+  type VoiceProgress,
+} from "@/lib/voice";
+import {
+  exportStoryboardMp4,
+  isAudioExportSupported,
+  isMp4ExportSupported,
+  Mp4UnsupportedError,
+  type Mp4Progress,
+} from "@/lib/export-mp4";
+import { downloadBlob, svgToPng } from "@/lib/export-image";
 
 const STORAGE_KEY = "character-studio:story:script:v1";
 const SHOTS_KEY = "character-studio:story:shots:v1";
@@ -49,6 +70,24 @@ export default function StoryPage() {
   const [dragId, setDragId] = useState<string | null>(null);
   const [renderError, setRenderError] = useState<string | null>(null);
   const boardRef = useRef<Storyboard | null>(null);
+  // Voice (Kokoro in-browser TTS): one clip per script line, keyed
+  // by the first shot id of the line. The timeline is built from
+  // these clips — every shot lasts exactly as long as its narration.
+  const [voice, setVoice] = useState<VoiceId>(DEFAULT_VOICE);
+  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceProgress, setVoiceProgress] = useState<VoiceProgress | null>(null);
+  const [voiceError, setVoiceError] = useState<string | null>(null);
+  const [clips, setClips] = useState<Map<string, VoiceClip>>(new Map());
+  const [voiceApplied, setVoiceApplied] = useState(false);
+  const [playingLine, setPlayingLine] = useState<string | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  // MP4 export.
+  const [exportBusy, setExportBusy] = useState(false);
+  const [exportProgress, setExportProgress] = useState<Mp4Progress | null>(null);
+  const [exportError, setExportError] = useState<string | null>(null);
+  const [exportDone, setExportDone] = useState<string | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const audioTimelineRef = useRef<{ samples: Float32Array; sampleRate: number } | null>(null);
 
   useEffect(() => {
     const { cast: loadedCast } = loadCast();
@@ -83,6 +122,10 @@ export default function StoryPage() {
     boardRef.current = b;
     setBoard(b);
     setSelectedId(b.shots[0]?.id ?? null);
+    // A new script invalidates the old narration.
+    setClips(new Map());
+    setVoiceApplied(false);
+    audioTimelineRef.current = null;
     try {
       window.localStorage.setItem(STORAGE_KEY, script);
       window.localStorage.setItem(SHOTS_KEY, JSON.stringify(b));
@@ -186,6 +229,154 @@ export default function StoryPage() {
     URL.revokeObjectURL(url);
   };
 
+  /** Group shots back into script lines (part 1 + part 2 pairs). */
+  const lineGroups = useCallback((b: Storyboard): Array<{ first: Shot; second: Shot | null }> => {
+    const groups: Array<{ first: Shot; second: Shot | null }> = [];
+    let i = 0;
+    while (i < b.shots.length) {
+      const first = b.shots[i];
+      const second = first.ofParts === 2 && b.shots[i + 1] ? b.shots[i + 1] : null;
+      groups.push({ first, second });
+      i += second ? 2 : 1;
+    }
+    return groups;
+  }, []);
+
+  /** Generate narration with Kokoro (free, in-browser) and re-time the board to the real audio. */
+  const generateNarration = useCallback(async () => {
+    const b = boardRef.current;
+    if (!b) return;
+    setVoiceBusy(true);
+    setVoiceError(null);
+    setVoiceProgress({ stage: "loading-model", percent: 0, note: "Starting…" });
+    try {
+      const tts = await loadVoice(setVoiceProgress);
+      const groups = lineGroups(b).filter((g) => !g.first.scene.textCard);
+      const newClips = new Map<string, VoiceClip>();
+      let done = 0;
+      for (const g of groups) {
+        const text = g.second ? `${g.first.text} ${g.second.text}` : g.first.text;
+        setVoiceProgress({
+          stage: "synthesizing",
+          percent: Math.round((done / Math.max(1, groups.length)) * 100),
+          note: `Speaking line ${done + 1} of ${groups.length}…`,
+        });
+        const clip = await synthesizeLine(tts, text, voice, g.first.id);
+        newClips.set(g.first.id, clip);
+        done += 1;
+      }
+      const { samples, durations } = buildNarrationTimeline(b, newClips);
+      const retimed = retimeBoard(b, durations);
+      audioTimelineRef.current = { samples, sampleRate: 24000 };
+      setClips(newClips);
+      persistBoard(retimed);
+      setVoiceApplied(true);
+      setNotice(
+        `Narration ready — ${groups.length} lines spoken, runtime now ${formatDuration(retimed.totalSec)} (real voice timing, not the 150 wpm estimate). Each shot now lasts exactly as long as its narration.`,
+      );
+    } catch (err) {
+      setVoiceError(
+        err instanceof VoiceError
+          ? err.message
+          : err instanceof Error
+            ? err.message
+            : "Voice generation failed.",
+      );
+    } finally {
+      setVoiceBusy(false);
+      setVoiceProgress(null);
+    }
+  }, [lineGroups, persistBoard, voice]);
+
+  /** Replay one line's narration (WAV, in the browser). */
+  const playLine = useCallback(
+    (lineFirstShotId: string) => {
+      const clip = clips.get(lineFirstShotId);
+      if (!clip) return;
+      if (audioRef.current) audioRef.current.pause();
+      const blob = pcmToWav(clip.samples, clip.sampleRate);
+      const url = URL.createObjectURL(blob);
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      setPlayingLine(lineFirstShotId);
+      audio.onended = () => {
+        setPlayingLine(null);
+        URL.revokeObjectURL(url);
+      };
+      void audio.play().catch(() => setPlayingLine(null));
+    },
+    [clips],
+  );
+
+  /** Full pipeline: shots (+ narration when available) → MP4 download. */
+  const exportVideo = useCallback(
+    async (withAudio: boolean) => {
+      const b = boardRef.current;
+      if (!b) return;
+      if (!isMp4ExportSupported()) {
+        setExportError(
+          "This browser cannot encode video (WebCodecs is unavailable). Download the PNG stills instead — they are the same frames.",
+        );
+        return;
+      }
+      setExportBusy(true);
+      setExportError(null);
+      setExportDone(null);
+      const controller = new AbortController();
+      abortRef.current = controller;
+      try {
+        const audio =
+          withAudio && audioTimelineRef.current
+            ? { samples: audioTimelineRef.current.samples, sampleRate: audioTimelineRef.current.sampleRate }
+            : undefined;
+        const { blob, audioIncluded } = await exportStoryboardMp4(b, castMap, {
+          audio,
+          onProgress: setExportProgress,
+          signal: controller.signal,
+        });
+        downloadBlob(blob, "character-studio-video.mp4");
+        setExportDone(
+          audioIncluded
+            ? `Video downloaded — ${formatDuration(b.totalSec)}, with narration.`
+            : `Video downloaded — ${formatDuration(b.totalSec)}. No audio track: this browser cannot encode AAC, so the video is silent.`,
+        );
+      } catch (err) {
+        if (err instanceof DOMException && err.name === "AbortError") setExportError("Export cancelled.");
+        else if (err instanceof Mp4UnsupportedError) setExportError(err.message);
+        else setExportError(err instanceof Error ? err.message : "Export failed.");
+      } finally {
+        setExportBusy(false);
+        setExportProgress(null);
+        abortRef.current = null;
+      }
+    },
+    [castMap],
+  );
+
+  /** Fallback: every shot as a PNG still (the same frames as the video). */
+  const downloadStills = useCallback(async () => {
+    const b = boardRef.current;
+    if (!b) return;
+    setExportBusy(true);
+    setExportError(null);
+    setExportDone(null);
+    try {
+      for (let i = 0; i < b.shots.length; i++) {
+        const shot = b.shots[i];
+        const scene = shotToScene(shot, 7);
+        const { svg } = renderScene(scene, castMap, { width: 1920, height: 1080 });
+        const blob = await svgToPng(svg, 1920, 1080);
+        downloadBlob(blob, `shot-${String(i + 1).padStart(2, "0")}.png`);
+        await new Promise((r) => setTimeout(r, 300));
+      }
+      setExportDone(`${b.shots.length} stills downloaded as PNG.`);
+    } catch (err) {
+      setExportError(err instanceof Error ? err.message : "The stills could not be made.");
+    } finally {
+      setExportBusy(false);
+    }
+  }, [castMap]);
+
   const copyScript = async () => {
     try {
       await navigator.clipboard.writeText(script);
@@ -264,17 +455,105 @@ export default function StoryPage() {
               <dl className="mt-2 space-y-1 text-sm">
                 <div className="flex justify-between"><dt className="text-neutral-500">Shots</dt><dd className="font-medium">{board.shots.length}</dd></div>
                 <div className="flex justify-between"><dt className="text-neutral-500">Script lines</dt><dd className="font-medium">{board.lineCount}</dd></div>
-                <div className="flex justify-between"><dt className="text-neutral-500">Total runtime</dt><dd className="font-medium">{formatDuration(board.totalSec)}</dd></div>
+                <div className="flex justify-between"><dt className="text-neutral-500">Total runtime</dt><dd className="font-medium">{formatDuration(board.totalSec)}{voiceApplied ? " · voice-timed ✓" : " · 150 wpm estimate"}</dd></div>
                 <div className="flex justify-between"><dt className="text-neutral-500">Pacing</dt><dd className="font-medium">~{Math.round(board.shotsPerMinute)} shots/min</dd></div>
                 <div className="flex justify-between"><dt className="text-neutral-500">Format</dt><dd className="font-medium">Stills + hard cuts</dd></div>
               </dl>
-              <button type="button" onClick={downloadJson} className="mt-3 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-100">
-                Download storyboard JSON
-              </button>
-              <p className="mt-2 text-xs leading-relaxed text-neutral-500">
-                MP4 export (stills + narration timing) is the next milestone — this JSON already
-                describes every shot your video needs.
-              </p>
+
+              {/* Voice */}
+              <div className="mt-4 border-t border-neutral-100 pt-3">
+                <h3 className="text-sm font-semibold">Narration — free voice, in your browser</h3>
+                <label className="mt-2 block">
+                  <span className="text-xs text-neutral-500">Voice</span>
+                  <select
+                    value={voice}
+                    onChange={(e) => setVoice(e.target.value as VoiceId)}
+                    className="mt-1 w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm"
+                  >
+                    {VOICE_OPTIONS.map((v) => (
+                      <option key={v.id} value={v.id}>{v.name} — {v.gender} · {v.note}</option>
+                    ))}
+                  </select>
+                </label>
+                <button
+                  type="button"
+                  onClick={generateNarration}
+                  disabled={voiceBusy}
+                  className="mt-2 w-full rounded-md bg-neutral-900 px-3 py-2 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+                >
+                  {voiceBusy ? "Working…" : voiceApplied ? "Regenerate narration" : "Generate narration"}
+                </button>
+                {voiceProgress && (
+                  <div className="mt-2">
+                    <p className="text-xs text-neutral-600">{voiceProgress.note}</p>
+                    {voiceProgress.percent >= 0 && (
+                      <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-neutral-200">
+                        <div className="h-full bg-neutral-900 transition-all" style={{ width: `${voiceProgress.percent}%` }} />
+                      </div>
+                    )}
+                    <p className="mt-1 text-xs text-neutral-500">First time only: the voice model (~86 MB) downloads once, then it works offline.</p>
+                  </div>
+                )}
+                {voiceError && (
+                  <p className="mt-2 rounded-md border border-red-300 bg-red-50 px-2 py-1.5 text-xs text-red-900">{voiceError}</p>
+                )}
+                {voiceApplied && (
+                  <p className="mt-2 text-xs leading-relaxed text-neutral-600">
+                    Narration is on — every shot lasts exactly as long as its voice clip. Replay any line from its
+                    shot card below.
+                  </p>
+                )}
+              </div>
+
+              {/* Export */}
+              <div className="mt-4 border-t border-neutral-100 pt-3">
+                <h3 className="text-sm font-semibold">Export</h3>
+                <button
+                  type="button"
+                  onClick={() => exportVideo(true)}
+                  disabled={exportBusy}
+                  className="mt-2 w-full rounded-md bg-neutral-900 px-3 py-2.5 text-sm font-medium text-white hover:bg-neutral-700 disabled:opacity-50"
+                >
+                  {exportBusy ? "Exporting…" : "🎬 Generate video (MP4)"}
+                </button>
+                <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+                  {voiceApplied
+                    ? "One click: every shot held for its narration, with the voice track included. Silent-ready if the voice is off."
+                    : "Tip: generate narration first — then each shot lasts exactly as long as its voice. Without it, the video uses the 150 wpm timing and is silent."}
+                  {!isAudioExportSupported() && " This browser cannot encode an AAC audio track, so exports will be silent."}
+                </p>
+                {exportProgress && (
+                  <div className="mt-2">
+                    <p className="text-xs text-neutral-600">{exportProgress.stage} ({exportProgress.done}/{exportProgress.total})</p>
+                    <div className="mt-1 h-2 w-full overflow-hidden rounded-full bg-neutral-200">
+                      <div className="h-full bg-neutral-900 transition-all" style={{ width: `${Math.round((exportProgress.done / Math.max(1, exportProgress.total)) * 100)}%` }} />
+                    </div>
+                  </div>
+                )}
+                {exportBusy && (
+                  <button
+                    type="button"
+                    onClick={() => abortRef.current?.abort()}
+                    className="mt-2 w-full rounded-md border border-red-200 px-3 py-1.5 text-sm text-red-700"
+                  >
+                    Cancel export
+                  </button>
+                )}
+                {exportError && (
+                  <p className="mt-2 rounded-md border border-red-300 bg-red-50 px-2 py-1.5 text-xs text-red-900">{exportError}</p>
+                )}
+                {exportDone && (
+                  <p className="mt-2 rounded-md border border-green-300 bg-green-50 px-2 py-1.5 text-xs text-green-900">{exportDone}</p>
+                )}
+                <div className="mt-2 flex gap-2">
+                  <button type="button" onClick={downloadStills} disabled={exportBusy} className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-100 disabled:opacity-50">
+                    PNG stills
+                  </button>
+                  <button type="button" onClick={downloadJson} className="flex-1 rounded-md border border-neutral-300 px-3 py-2 text-sm hover:bg-neutral-100">
+                    Storyboard JSON
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -423,6 +702,29 @@ export default function StoryPage() {
                       {shot.scene.cutaway ? `Cut-away: ${shot.scene.cutaway}` : BACKGROUND_NAMES[shot.scene.background]}
                       {` · ${shot.scene.variant} · ${shot.scene.camera} · ${shot.scene.pose}`}
                     </p>
+                    {(shot.scene as { reason?: string }).reason && (
+                      <p className="mt-1 text-xs leading-snug text-neutral-600">
+                        Why this scene: {(shot.scene as { reason?: string }).reason}
+                      </p>
+                    )}
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {shot.part === 1 && clips.has(shot.id) && (
+                        <button
+                          type="button"
+                          onClick={(e) => { e.stopPropagation(); playLine(shot.id); }}
+                          className="rounded border border-neutral-300 px-2 py-0.5 text-xs"
+                        >
+                          {playingLine === shot.id ? "▶ Playing…" : "▶ Replay line"}
+                        </button>
+                      )}
+                      <a
+                        href={`/thumbs?character=${encodeURIComponent(shot.scene.characterId ?? "")}&title=${encodeURIComponent(shot.text.split(/\s+/).slice(0, 3).join(" "))}&bg=${encodeURIComponent(shot.scene.background)}`}
+                        onClick={(e) => e.stopPropagation()}
+                        className="rounded border border-neutral-300 px-2 py-0.5 text-xs hover:bg-neutral-100"
+                      >
+                        Make thumbnail →
+                      </a>
+                    </div>
                     <div className="mt-2 flex gap-2">
                       <button
                         type="button"

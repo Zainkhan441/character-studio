@@ -5,6 +5,7 @@ import {
   formatDuration,
   isTitleCard,
   lineToShots,
+  parseDialogue,
   parseScript,
   secondsForText,
   secondsForWords,
@@ -223,5 +224,182 @@ describe("formatDuration and shotToScene", () => {
     expect(v.poses).toBe(21);
     expect(v.faces).toBe(13);
     expect(v.animals).toBe(4);
+  });
+});
+
+describe("semantic exact-match (M3 advance, 2026-11-05)", () => {
+  // One line per semantic axis; every line is <= 11 words so it
+  // stays a single shot (11 words = 4.4s at 150 wpm).
+  const SCRIPT = [
+    "They gathered around the fire under the stars.",
+    "Snow fell all winter, and the cold froze the river.",
+    "They hid deep inside the cave, away from the storm.",
+    "The king stood before his people in the great city.",
+    "The soldiers fought the battle at dawn, swords raised.",
+    "They rode the horse across the desert, travelling for days.",
+    "At night they slept on soft mats, dreaming of home.",
+    "They cooked the meat and ate together, sharing the food.",
+    "Why did they leave? He wondered, thinking about the question.",
+    'John: "We must leave before dawn, or the cold finds us."',
+  ].join("\n");
+
+  it("produces the right background / pose / prop for at least 8 of 10 lines", () => {
+    const board = buildStoryboard(SCRIPT, CAST);
+    expect(board.shots).toHaveLength(10);
+    const [nightFire, snow, cave, king, battle, travel, sleep, food, think, dialogue] = board.shots.map(
+      (s) => s.scene,
+    );
+
+    // 1. night + fire: hut camp, fire lighting, fire prop, night.
+    expect(nightFire.background).toBe("hut");
+    expect(nightFire.lighting).toBe("fire");
+    expect(nightFire.props.some((p) => p.prop === "fire")).toBe(true);
+    expect(nightFire.variant).toBe("night");
+
+    // 2. snow / cold: snow background (river has no matching
+    // background — noted in the reason, not silently wrong).
+    expect(snow.background).toBe("snow");
+    expect(snow.reason).toContain("river");
+
+    // 3. cave: cave background.
+    expect(cave.background).toBe("cave");
+
+    // 4. city / king: city background, standing pose.
+    expect(king.background).toBe("city");
+    expect(king.pose).toBe("stand");
+
+    // 5. battle: fighting stance, angry expression.
+    expect(battle.pose).toBe("aim");
+    expect(battle.expression).toBe("angry");
+
+    // 6. travel + horse + desert: desert background, horse, walk.
+    expect(travel.background).toBe("desert");
+    expect(travel.animal?.species).toBe("horse");
+    expect(travel.pose).toBe("walk");
+
+    // 7. sleep: lying pose, night variant.
+    expect(sleep.pose).toBe("lie");
+    expect(sleep.variant).toBe("night");
+
+    // 8. food / eating: holding pose, basket prop.
+    expect(food.pose).toBe("hold");
+    expect(food.props.some((p) => p.prop === "basket")).toBe(true);
+
+    // 9. thinking / question: think pose, thinking expression.
+    expect(think.pose).toBe("think");
+    expect(think.expression).toBe("thinking");
+
+    // 10. dialogue: close-up camera, point (talking) pose.
+    expect(dialogue.camera).toBe("closeup");
+    expect(dialogue.pose).toBe("point");
+  });
+
+  it("every shot carries a non-empty reason naming what it matched", () => {
+    const board = buildStoryboard(SCRIPT, CAST);
+    for (const shot of board.shots) {
+      expect(shot.scene.reason.length).toBeGreaterThan(0);
+      expect(shot.scene.reason).toContain("→");
+    }
+    // The night+fire reason names the matched words and the result.
+    expect(board.shots[0].scene.reason).toContain('"fire"');
+    expect(board.shots[0].scene.reason).toContain("hut background");
+    expect(board.shots[0].scene.reason).toContain("fire lighting");
+  });
+
+  it("plain lines still rotate and still get a reason", () => {
+    const bgs = [0, 1, 2, 3].map((i) => suggestScene("They kept going.", i, CAST));
+    expect(new Set(bgs.map((s) => s.background)).size).toBe(4);
+    for (const s of bgs) {
+      expect(s.reason.length).toBeGreaterThan(0);
+      expect(s.reason).toContain("no strong keyword match");
+    }
+  });
+
+  it("title cards get a reason too, and are not dialogue", () => {
+    const s = suggestScene("THE FIRST NIGHT", 0, CAST);
+    expect(s.reason).toContain("Title card");
+    expect(s.textCard?.title).toBe("THE FIRST NIGHT");
+    expect(parseDialogue("THE FIRST NIGHT")).toBeNull();
+    // ...but a colon title is not dialogue either.
+    expect(parseDialogue("Fire: The First Night")).toBeNull();
+    expect(isTitleCard("Fire: The First Night")).toBe(true);
+  });
+});
+
+describe("dialogue detection", () => {
+  it("detects Name: \"...\" lines with the speaker", () => {
+    expect(parseDialogue('John: "We must leave before dawn."')).toEqual({ speaker: "John" });
+  });
+
+  it("detects bare quoted lines with no speaker", () => {
+    expect(parseDialogue('"We must leave before dawn."')).toEqual({ speaker: null });
+  });
+
+  it("does not flag normal narration or titles as dialogue", () => {
+    expect(parseDialogue("They gathered around the fire at night.")).toBeNull();
+    expect(parseDialogue("Chapter 1: Fire")).toBeNull();
+  });
+
+  it("dialogue lines get a close-up or medium camera, never wide", () => {
+    const board = buildStoryboard('John: "We must leave before dawn."\n"We go now," she said.', CAST);
+    for (const shot of board.shots) {
+      expect(["closeup", "medium"]).toContain(shot.scene.camera);
+      expect(shot.scene.pose).toBe("point");
+    }
+  });
+});
+
+describe("new semantic rules", () => {
+  it("dusk lines get the dusk variant, dawn lines stay day", () => {
+    expect(suggestScene("The sun set at dusk over the plain.", 0, CAST).variant).toBe("dusk");
+    expect(suggestScene("At dawn the sun rose over the plain.", 0, CAST).variant).toBe("day");
+  });
+
+  it("run / sit / dig / throw map to their poses", () => {
+    expect(suggestScene("They ran from the storm.", 0, CAST).pose).toBe("run");
+    expect(suggestScene("They sat on the rock.", 0, CAST).pose).toBe("sit");
+    expect(suggestScene("They dug into the hard ground.", 0, CAST).pose).toBe("dig");
+    expect(suggestScene("He threw the spear far.", 0, CAST).pose).toBe("throw");
+  });
+
+  it("emotion words map to expressions", () => {
+    expect(suggestScene("She was afraid of the dark.", 0, CAST).expression).toBe("scared");
+    expect(suggestScene("He was worried about the winter.", 0, CAST).expression).toBe("worried");
+    expect(suggestScene("They were surprised by the storm.", 0, CAST).expression).toBe("surprised");
+  });
+
+  it("a named location beats the travel rule's savanna", () => {
+    const s = suggestScene("They walked through the dark forest for days.", 0, CAST);
+    expect(s.background).toBe("forest");
+    expect(s.pose).toBe("walk");
+  });
+
+  it("a named location beats the hunt rule too", () => {
+    const s = suggestScene("They hunted deer in the forest.", 0, CAST);
+    expect(s.background).toBe("forest");
+    expect(s.pose).toBe("aim");
+  });
+
+  it("torch and lamp lines get the matching prop and lighting", () => {
+    const torch = suggestScene("He raised the torch in the cave.", 0, CAST);
+    expect(torch.props.some((p) => p.prop === "torch")).toBe(true);
+    expect(torch.lighting).toBe("fire");
+    const lamp = suggestScene("The lamp burned in the house.", 0, CAST);
+    expect(lamp.props.some((p) => p.prop === "lamp")).toBe(true);
+    expect(lamp.lighting).toBe("lamp");
+  });
+
+  it("split long lines recompute the reason for part 2", () => {
+    const shots = lineToShots(
+      "Ancient humans did not sleep the way we do today, they gathered around the fire in small groups and told stories until the stars came out.",
+      0,
+      CAST,
+    );
+    expect(shots).toHaveLength(2);
+    expect(shots[0].scene.reason.length).toBeGreaterThan(0);
+    expect(shots[1].scene.reason.length).toBeGreaterThan(0);
+    expect(shots[1].scene.reason).toContain("→");
+    // Part 2 has a different camera, and its reason says so.
+    expect(shots[1].scene.camera).not.toBe(shots[0].scene.camera);
   });
 });

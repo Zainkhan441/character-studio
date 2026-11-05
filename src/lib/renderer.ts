@@ -27,6 +27,7 @@ import type {
   OutfitDef,
   OutfitName,
   PoseKind,
+  PoseName,
   PropName,
 } from "./character";
 import { HAIR_COLORS, OUTFITS, POSES } from "./character";
@@ -60,6 +61,42 @@ function pathFromPoints(pts: readonly Pt[]): string {
 
 function closedPath(pts: readonly Pt[]): string {
   return pathFromPoints(pts) + " Z";
+}
+
+/**
+ * Corner points for rounding a polyline joint: p1 sits `r` before the
+ * joint on the incoming segment, p2 sits `r` after it on the outgoing
+ * segment. The joint position itself never moves — only the drawn
+ * path rounds the corner (M3 drawing, 2026-11-05).
+ */
+export function cornerPoints(a: Pt, k: Pt, b: Pt, r = 0.15): { p1: Pt; p2: Pt } {
+  const d1 = Math.hypot(k[0] - a[0], k[1] - a[1]) || 1;
+  const d2 = Math.hypot(b[0] - k[0], b[1] - k[1]) || 1;
+  const rr = Math.min(r, d1 * 0.4, d2 * 0.4);
+  return {
+    p1: [k[0] - ((k[0] - a[0]) / d1) * rr, k[1] - ((k[1] - a[1]) / d1) * rr],
+    p2: [k[0] + ((b[0] - k[0]) / d2) * rr, k[1] + ((b[1] - k[1]) / d2) * rr],
+  };
+}
+
+/**
+ * Polyline path with a small quadratic curve at every interior joint,
+ * so elbows/knees (and sleeve/trouser tubes) read as smooth bends
+ * instead of sharp angles. Endpoints and joint positions are
+ * identical to the straight polyline — computeSkeleton and the pose
+ * editor are unaffected. With < 3 points it is just a straight path.
+ */
+export function roundedPolyline(pts: readonly Pt[], r = 0.15): string {
+  if (pts.length < 3) return pathFromPoints(pts);
+  let d = `M${fmt(pts[0][0])},${fmt(pts[0][1])}`;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const k = pts[i];
+    const { p1, p2 } = cornerPoints(pts[i - 1], k, pts[i + 1], r);
+    d += ` L${fmt(p1[0])},${fmt(p1[1])} Q${fmt(k[0])},${fmt(k[1])} ${fmt(p2[0])},${fmt(p2[1])}`;
+  }
+  const last = pts[pts.length - 1];
+  d += ` L${fmt(last[0])},${fmt(last[1])}`;
+  return d;
 }
 
 function polar(cx: number, cy: number, angDeg: number, rad: number): Pt {
@@ -98,11 +135,29 @@ function shade(hexcol: string, k: number): string {
 }
 
 function tube(pts: readonly Pt[], width: number, color: string, ink: string, ow: number): string {
-  const d = pathFromPoints(pts);
+  // Rounded at the joint (M3): a sleeved elbow/knee bends smoothly.
+  const d = roundedPolyline(pts);
   return (
     `<path d="${d}" stroke="${ink}" stroke-width="${fmt(width + 2 * ow)}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>` +
     `<path d="${d}" stroke="${color}" stroke-width="${fmt(width)}" fill="none" stroke-linecap="round" stroke-linejoin="round"/>` +
     `<path d="${d}" stroke="${shade(color, 0.82)}" stroke-width="${fmt(width * 0.25)}" fill="none" stroke-linecap="round" opacity="0.6" transform="translate(${fmt(width * 0.22)},0)"/>`
+  );
+}
+
+/**
+ * Subtle two-sided shading for a torso garment (M3): a soft darker
+ * edge on one side, a light edge on the other — the same trick tube()
+ * uses for limbs, so the body reads less flat. Drawn in upright torso
+ * space; `hemY` is the garment's hem, `edge` its half-width at the hem.
+ */
+function torsoShade(color: string, torso: number, hemY: number, edge = 0.58): string {
+  const dk = shade(color, 0.78);
+  const lt = shade(color, 1.3);
+  const top = -torso + 0.35;
+  const ex = edge * 0.82;
+  return (
+    `<path d="M0.44,${fmt(top, 2)} Q0.52,-0.5 ${fmt(ex, 2)},${fmt(hemY - 0.06, 2)}" stroke="${dk}" stroke-width="0.09" fill="none" opacity="0.45" stroke-linecap="round" data-torso-shade="dark"/>` +
+    `<path d="M-0.44,${fmt(top, 2)} Q-0.52,-0.5 ${fmt(-ex, 2)},${fmt(hemY - 0.06, 2)}" stroke="${lt}" stroke-width="0.07" fill="none" opacity="0.55" stroke-linecap="round" data-torso-shade="light"/>`
   );
 }
 
@@ -418,9 +473,10 @@ function hairRagged(ctx: HairCtx, color: string): string {
     const x1 = hx + xs[i];
     const x2 = hx + xs[i + 1];
     const tx = (x1 + x2) / 2 + 0.1;
-    // Fringe tips raised ~0.08 (M1, 2026-11-05): the old fringe hung
-    // low over the forehead and hid the face.
-    const ty = hy - 0.62 + rng.uniform(0.27, 0.36);
+    // Fringe tips raised (M3, 2026-11-05): the old range
+    // (0.27–0.36) put tips as low as hy-0.26, only 0.06 above the
+    // brow line — inside the R7 margin. 0.22–0.31 keeps ≥0.11 clear.
+    const ty = hy - 0.62 + rng.uniform(0.22, 0.31);
     d +=
       `Q${fmt(x1 + 0.02)},${fmt(ty - 0.12)} ${fmt(tx)},${fmt(ty)} ` +
       `Q${fmt(x2 - 0.05)},${fmt(ty - 0.12)} ${fmt(x2)},${fmt(hy - 0.58)} `;
@@ -888,9 +944,16 @@ export function faceSvg(hx: number, hy: number, opts: FaceOpts, ink: string): st
     if (mouth > 0.5) {
       s.push(`<ellipse cx="${f2(mx)}" cy="${f2(my + h * 1.2)}" rx="0.07" ry="${f2(h * 0.4)}" fill="#d86a6a"/>`);
     }
-  } else if (face === "happy" || face === "content") {
+  } else if (face === "happy") {
+    // Wide open smile (0.48 wide, deep arc) — clearly bigger than
+    // content's small smile (M3): the two used to share one shape.
     s.push(
       `<path d="M${f2(mx - 0.24)},${f2(my - 0.06)} Q${f2(mx - 0.21)},${f2(my - 0.01)} ${f2(mx - 0.17)},${f2(my)} Q${f2(mx)},${f2(my + 0.16)} ${f2(mx + 0.17)},${f2(my)} Q${f2(mx + 0.21)},${f2(my - 0.01)} ${f2(mx + 0.24)},${f2(my - 0.06)}" ${sw}/>`,
+    );
+  } else if (face === "content") {
+    // Small gentle smile (0.36 wide, shallow) — calm, not grinning.
+    s.push(
+      `<path d="M${f2(mx - 0.18)},${f2(my - 0.02)} Q${f2(mx)},${f2(my + 0.08)} ${f2(mx + 0.18)},${f2(my - 0.02)}" ${sw}/>`,
     );
   } else if (face === "smirk") {
     s.push(`<path d="M${f2(mx - 0.16)},${f2(my + 0.04)} Q${f2(mx + 0.05)},${f2(my + 0.08)} ${f2(mx + 0.2)},${f2(my - 0.06)}" ${sw}/>`);
@@ -902,17 +965,28 @@ export function faceSvg(hx: number, hy: number, opts: FaceOpts, ink: string): st
     );
   } else if (face === "sad" || face === "worried") {
     s.push(`<path d="M${f2(mx - 0.18)},${f2(my + 0.07)} Q${f2(mx)},${f2(my - 0.1)} ${f2(mx + 0.18)},${f2(my + 0.07)}" ${sw}/>`);
+    // Inner-raised brows: worried raises them steeper than sad, so
+    // the two read differently at a glance (M3).
+    const innerLift = face === "worried" ? 0.36 : 0.31;
     s.push(
-      `<path d="M${f2(e1 - 0.13)},${f2(ey - 0.21)} L${f2(e1 + 0.1)},${f2(ey - 0.31)} M${f2(e2 - 0.1)},${f2(ey - 0.31)} L${f2(e2 + 0.13)},${f2(ey - 0.21)}" ${sw}/>`,
+      `<path d="M${f2(e1 - 0.13)},${f2(ey - 0.21)} L${f2(e1 + 0.1)},${f2(ey - innerLift)} M${f2(e2 - 0.1)},${f2(ey - innerLift)} L${f2(e2 + 0.13)},${f2(ey - 0.21)}" ${sw}/>`,
     );
   } else if (face === "angry") {
     s.push(`<path d="M${f2(mx - 0.16)},${f2(my + 0.05)} Q${f2(mx)},${f2(my - 0.03)} ${f2(mx + 0.16)},${f2(my + 0.05)}" ${sw}/>`);
+    // Angry brows: thicker (0.09) and a hard V — inner ends driven
+    // down, so the glare reads at a glance (M3).
     s.push(
-      `<path d="M${f2(e1 - 0.13)},${f2(ey - 0.33)} L${f2(e1 + 0.1)},${f2(ey - 0.21)} M${f2(e2 - 0.1)},${f2(ey - 0.21)} L${f2(e2 + 0.13)},${f2(ey - 0.33)}" ${sw}/>`,
+      `<path d="M${f2(e1 - 0.14)},${f2(ey - 0.35)} L${f2(e1 + 0.11)},${f2(ey - 0.19)} M${f2(e2 - 0.11)},${f2(ey - 0.19)} L${f2(e2 + 0.14)},${f2(ey - 0.35)}" stroke="${ink}" stroke-width="0.09" fill="none" stroke-linecap="round"/>`,
     );
   } else if (face === "surprised" || face === "scared" || face === "shocked") {
     s.push(`<ellipse cx="${f2(mx)}" cy="${f2(my + 0.03)}" rx="0.1" ry="0.14" fill="${ink}"/>`);
-    if (face !== "surprised") {
+    if (face === "surprised") {
+      // High even arches — the old code drew NO brows for surprised,
+      // so it read as blank shock; arches + wide eyes read surprised.
+      s.push(
+        `<path d="M${f2(e1 - 0.13)},${f2(ey - 0.34)} Q${f2(e1)},${f2(ey - 0.46)} ${f2(e1 + 0.12)},${f2(ey - 0.35)} M${f2(e2 - 0.12)},${f2(ey - 0.35)} Q${f2(e2)},${f2(ey - 0.46)} ${f2(e2 + 0.13)},${f2(ey - 0.34)}" stroke="${ink}" stroke-width="0.06" fill="none" stroke-linecap="round"/>`,
+      );
+    } else {
       s.push(
         `<path d="M${f2(e1 - 0.13)},${f2(ey - 0.3)} L${f2(e1 + 0.1)},${f2(ey - 0.4)} M${f2(e2 - 0.1)},${f2(ey - 0.4)} L${f2(e2 + 0.13)},${f2(ey - 0.3)}" ${sw}/>`,
       );
@@ -1061,7 +1135,7 @@ function topSvg(o: OutfitDef, sit: boolean, ink: string, ow: number, torso: numb
     if (col === "toga") {
       body += `<path d="M-0.45,${f2(-T + 0.15)} Q0.2,${f2(-T + 0.9)} 0.7,-0.2" stroke="#a8322b" stroke-width="0.2" fill="none" stroke-linecap="round"/>`;
     }
-    return body;
+    return body + torsoShade(c, T, L, 1.0);
   }
   const hem = col !== "coat" && col !== "tunic" ? 0.18 : !sit ? 0.75 : 0.35;
   const flare = col !== "coat" && col !== "tunic" ? 0.58 : 0.72;
@@ -1099,7 +1173,7 @@ function topSvg(o: OutfitDef, sit: boolean, ink: string, ow: number, torso: numb
   } else if (col === "armor") {
     body += Array.from({ length: 5 }, (_, i) => `<path d="M-0.55,${f2(-T + 0.4 + 0.28 * i)} Q0,${f2(-T + 0.5 + 0.28 * i)} 0.55,${f2(-T + 0.4 + 0.28 * i)}" stroke="${ink}" stroke-width="0.05" fill="none"/>`).join("");
   }
-  return body;
+  return body + torsoShade(c, T, hem);
 }
 
 function hipsSvg(o: OutfitDef, ink: string, ow: number): string {
@@ -1405,6 +1479,24 @@ export interface CharacterRenderOpts {
   y?: number;
 }
 
+/** Hand shapes (M3 drawing). */
+export type HandKind = "open" | "fist" | "grip";
+
+/**
+ * Poses whose (empty) hand reads as an open palm: pointing, waving,
+ * cheering, holding something up, shrugging, aiming. Every other pose
+ * gets a simple fist; a hand gripping a held prop gets the grip shape.
+ */
+const OPEN_HAND_POSES: ReadonlySet<PoseName> = new Set([
+  "point",
+  "wave",
+  "cheer",
+  "hold",
+  "hold_up",
+  "shrug",
+  "aim",
+]);
+
 export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts = {}): string {
   const sk = computeSkeleton(c);
   const ink = c.style.ink;
@@ -1451,10 +1543,18 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
   if (outfitName === "caveman") shoe = c.outfit.furBoots ? "#8a6a44" : "#ffffff";
   if (c.outfit.shoeColor) shoe = c.outfit.shoeColor;
 
-  const limbPath = (a: Pt, k: Pt, b: Pt, w = 1.0): string =>
-    `<path d="${pathFromPoints([a, k])}" stroke="${ink}" stroke-width="${fmt(lw * 1.12 * w)}" fill="none" stroke-linecap="round"/>` +
-    `<path d="${pathFromPoints([k, b])}" stroke="${ink}" stroke-width="${fmt(lw * 0.92 * w)}" fill="none" stroke-linecap="round"/>` +
-    `<circle cx="${fmt(k[0])}" cy="${fmt(k[1])}" r="${fmt(lw * 0.52 * w)}" fill="${ink}"/>`;
+  const limbPath = (a: Pt, k: Pt, b: Pt, w = 1.0): string => {
+    // Rounded at the joint (M3): the two segments meet through a
+    // small quadratic so elbows/knees bend smoothly instead of
+    // kinking. Endpoints and the joint position are unchanged, and
+    // the old upper/lower taper is kept.
+    const { p1, p2 } = cornerPoints(a, k, b);
+    return (
+      `<path d="M${fmt(a[0])},${fmt(a[1])} L${fmt(p1[0])},${fmt(p1[1])}" stroke="${ink}" stroke-width="${fmt(lw * 1.12 * w)}" fill="none" stroke-linecap="round"/>` +
+      `<path d="M${fmt(p1[0])},${fmt(p1[1])} Q${fmt(k[0])},${fmt(k[1])} ${fmt(p2[0])},${fmt(p2[1])} L${fmt(b[0])},${fmt(b[1])}" stroke="${ink}" stroke-width="${fmt(lw * 0.92 * w)}" fill="none" stroke-linecap="round" data-limb="true"/>` +
+      `<circle cx="${fmt(k[0])}" cy="${fmt(k[1])}" r="${fmt(lw * 0.52 * w)}" fill="${ink}"/>`
+    );
+  };
 
   const foot = (knee: Pt, ank: Pt): string => {
     let ang = (Math.atan2(ank[1] - knee[1], ank[0] - knee[0]) * 180) / Math.PI - 90;
@@ -1466,22 +1566,37 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
     );
   };
 
-  const hand = (pt: Pt, holding: boolean, elbow: Pt | null): string => {
+  const hand = (pt: Pt, kind: HandKind, elbow: Pt | null): string => {
     if (elbow === null) {
-      return `<circle cx="${fmt(pt[0])}" cy="${fmt(pt[1])}" r="0.13" fill="#ffffff" stroke="${ink}" stroke-width="0.06"/>`;
+      return `<circle cx="${fmt(pt[0])}" cy="${fmt(pt[1])}" r="0.13" fill="#ffffff" stroke="${ink}" stroke-width="0.06" data-hand="dot"/>`;
     }
+    // Local +y points along the limb past the wrist; the group
+    // rotates with the limb angle, so the hand always attaches to
+    // the limb endpoint pointing the right way.
     const ang = (Math.atan2(pt[1] - elbow[1], pt[0] - elbow[0]) * 180) / Math.PI - 90;
-    if (holding) {
+    const open = `<g transform="translate(${fmt(pt[0])},${fmt(pt[1])}) rotate(${fmt(ang, 1)})" data-hand="open">`;
+    if (kind === "open") {
+      // Open palm: a rounded palm with three finger bumps on the far
+      // edge and a thumb hint — reads as a hand, not a tube end.
       return (
-        `<g transform="translate(${fmt(pt[0])},${fmt(pt[1])}) rotate(${fmt(ang, 1)})">` +
+        open +
+        `<path d="M-0.14,-0.05 Q-0.18,0.12 -0.14,0.2 Q-0.1,0.3 -0.05,0.23 Q0,0.31 0.05,0.23 Q0.1,0.3 0.14,0.2 Q0.18,0.12 0.14,-0.05 Q0,-0.11 -0.14,-0.05 Z" fill="#ffffff" stroke="${ink}" stroke-width="0.055" stroke-linejoin="round"/>` +
+        `<path d="M0.15,0.04 Q0.25,0.07 0.21,0.17" fill="none" stroke="${ink}" stroke-width="0.045" stroke-linecap="round"/></g>`
+      );
+    }
+    if (kind === "grip") {
+      // Fist curled around a held prop.
+      return (
+        `<g transform="translate(${fmt(pt[0])},${fmt(pt[1])}) rotate(${fmt(ang, 1)})" data-hand="grip">` +
         `<ellipse cx="0" cy="0.02" rx="0.15" ry="0.16" fill="#ffffff" stroke="${ink}" stroke-width="0.06"/>` +
         `<path d="M0.12,-0.04 q0.1,0.02 0.07,0.12" stroke="${ink}" stroke-width="0.045" fill="none" stroke-linecap="round"/></g>`
       );
     }
+    // Simple fist: a rounded blob with a knuckle curl line.
     return (
-      `<g transform="translate(${fmt(pt[0])},${fmt(pt[1])}) rotate(${fmt(ang, 1)})">` +
-      `<path d="M-0.11,-0.02 Q-0.13,0.2 0,0.24 Q0.13,0.2 0.11,-0.02 Q0,-0.08 -0.11,-0.02 Z" fill="#ffffff" stroke="${ink}" stroke-width="0.055" stroke-linejoin="round"/>` +
-      `<path d="M0.1,0.02 Q0.22,0.06 0.17,0.16" fill="#ffffff" stroke="${ink}" stroke-width="0.05" stroke-linecap="round"/></g>`
+      `<g transform="translate(${fmt(pt[0])},${fmt(pt[1])}) rotate(${fmt(ang, 1)})" data-hand="fist">` +
+      `<path d="M-0.12,-0.04 Q-0.16,0.14 -0.08,0.2 Q0,0.25 0.08,0.2 Q0.16,0.14 0.12,-0.04 Q0,-0.1 -0.12,-0.04 Z" fill="#ffffff" stroke="${ink}" stroke-width="0.055" stroke-linejoin="round"/>` +
+      `<path d="M-0.05,0.08 Q0.02,0.12 0.08,0.06" fill="none" stroke="${ink}" stroke-width="0.04" stroke-linecap="round"/></g>`
     );
   };
 
@@ -1500,8 +1615,8 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
     return "";
   };
 
-  const arm = (s_: Pt, k: Pt, h: Pt, holding: boolean): string =>
-    limbPath(s_, k, h) + sleeve(s_, k, h) + hand(h, holding, k);
+  const arm = (s_: Pt, k: Pt, h: Pt, handKind: HandKind): string =>
+    limbPath(s_, k, h) + sleeve(s_, k, h) + hand(h, handKind, k);
 
   const leg = (k: Pt, f: Pt): string => limbPath(hip, k, f, 1.08) + trouser(k, f) + foot(k, f);
 
@@ -1509,7 +1624,14 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
     `<g transform="translate(${fmt(pt[0])},${fmt(pt[1])})">${propSvg(hold, c.outfit.holdAngle, ink, ow)}</g>`;
 
   const frontArmHolding = hold !== "none" && handSide === "front";
-  const frontArmEl = arm(sh, frontArmL.knee, frontArmL.end, frontArmHolding);
+  const frontHandKind: HandKind = frontArmHolding
+    ? "grip"
+    : OPEN_HAND_POSES.has(c.pose)
+      ? "open"
+      : "fist";
+  const backHandKind: HandKind =
+    hold !== "none" && handSide === "back" ? "grip" : c.pose === "cheer" ? "open" : "fist";
+  const frontArmEl = arm(sh, frontArmL.knee, frontArmL.end, frontHandKind);
   // Hanging-arm rule (M1, 2026-11-05): with a sleeveless garment
   // (caveman fur, cavedress, toga) a front arm hanging straight down
   // draws as a thin diagonal line across the whole garment — it reads
@@ -1525,7 +1647,7 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
     frontArmL.end[1] > 0;
 
   const parts: string[] = [hairBackSvg(hx, hy, c.hair.style, hairColor, ink, ow)];
-  if (!behind) parts.push(arm(sh, backArmL.knee, backArmL.end, hold !== "none" && handSide === "back"));
+  if (!behind) parts.push(arm(sh, backArmL.knee, backArmL.end, backHandKind));
   if (frontArmBehind) parts.push(frontArmEl);
   if (hold !== "none" && handSide === "back") parts.push(propAt(backArmL.end));
   parts.push(leg(backLegL.knee, backLegL.end));
@@ -1551,8 +1673,8 @@ export function characterSvg(c: Character, rng: Rng, opts: CharacterRenderOpts =
   }
   parts.push(`<g transform="rotate(${fmt(lean, 1)})">${tor}</g>`);
   if (behind) {
-    parts.push(`<path d="${pathFromPoints([sh, backArmL.knee, backArmL.end])}" ${line}/>` + sleeve(sh, backArmL.knee, backArmL.end));
-    parts.push(`<path d="${pathFromPoints([sh, frontArmL.knee, frontArmL.end])}" ${line}/>` + sleeve(sh, frontArmL.knee, frontArmL.end));
+    parts.push(`<path d="${roundedPolyline([sh, backArmL.knee, backArmL.end])}" ${line}/>` + sleeve(sh, backArmL.knee, backArmL.end));
+    parts.push(`<path d="${roundedPolyline([sh, frontArmL.knee, frontArmL.end])}" ${line}/>` + sleeve(sh, frontArmL.knee, frontArmL.end));
   }
   // head
   const hair = c.hair.style;

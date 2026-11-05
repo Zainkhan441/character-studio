@@ -64,6 +64,9 @@ export default function Home() {
           <a href="/story" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">
             Script → Video
           </a>
+          <a href="/import" className="rounded-md border border-neutral-900 px-3 py-1.5 text-sm font-medium hover:bg-neutral-100">
+            ＋ Add your own character
+          </a>
           <a href="/creator" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-700">
             Open Creator
           </a>
@@ -95,7 +98,10 @@ export default function Home() {
         </button>
 
         <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-          <a href="/creator" className="rounded-md bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-neutral-700">
+          <a href="/import" className="rounded-md bg-neutral-900 px-5 py-2.5 text-sm font-medium text-white hover:bg-neutral-700">
+            ＋ Add your own character →
+          </a>
+          <a href="/creator" className="rounded-md border border-neutral-300 px-5 py-2.5 text-sm font-medium hover:bg-neutral-100">
             Create a character →
           </a>
           <a href="/cast" className="rounded-md border border-neutral-300 px-5 py-2.5 text-sm font-medium hover:bg-neutral-100">
@@ -110,16 +116,19 @@ export default function Home() {
         </div>
 
         <div className="mt-12 grid w-full max-w-3xl grid-cols-1 gap-4 text-left sm:grid-cols-3">
+          <Feature title="Add your own character" body="Upload any cartoon picture — the tool extracts the character, you correct it in two minutes, and it joins your cast. Your picture never leaves the browser." />
+          <Feature title="Script → video with voice" body="Paste a script, generate free in-browser narration, and export an MP4 where every shot lasts exactly as long as its voice. One click, start to finish." />
+          <Feature title="Thumbnail maker" body="1280×720 thumbnails from the same cast and renderer — one big character, big yellow letters, three layouts. The thumbnail art is the video art." />
           <Feature title="Cast library" body="Five starter characters — adult, female, elder, child, warrior. One click opens any of them in the Creator." />
           <Feature title="Family generator" body="From any character, make a female, child or elder variant — same style, same outfit family." />
-          <Feature title="Pose editor" body="Drag arms and legs right on the canvas, save the pose, reuse it forever. The same tool the character importer will use." />
+          <Feature title="Pose editor" body="Drag arms and legs right on the canvas, save the pose, reuse it forever. The same tool the character importer uses." />
           <Feature title="Scene editor" body="11 backgrounds × day/dusk/night, cut-away templates, props, animals, camera and lighting — stills that look like the videos in this niche." />
           <Feature title="Script → video" body="Paste a script. Every line becomes a shot; long lines split into two different shots. Storyboard, reorder, total runtime — ~25 stills a minute." />
           <Feature title="Cut-aways" body="House, igloo and soil-strata cross-sections — the most valuable shot in explainer videos, built in." />
         </div>
         <p className="mt-10 max-w-xl text-xs leading-relaxed text-neutral-400">
           Free to use. Characters render in your browser — nothing is uploaded, no account, no paid APIs.
-          Next: character import (upload a cartoon → the tool extracts it) and MP4 export.
+          Import, voice and MP4 export all run on your device.
         </p>
       </div>
     </main>
