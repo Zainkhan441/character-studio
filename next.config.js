@@ -41,6 +41,13 @@ class SkipOnnxBundleMinifyPlugin {
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // /poses was merged into /creator (ChatGPT audit, 2026-11-05).
+  // Route-level redirect: a real 307 + Location header. The
+  // redirect() call in src/app/poses/page.tsx is a fallback only —
+  // its statically prerendered 307 carries no Location header.
+  async redirects() {
+    return [{ source: "/poses", destination: "/creator", permanent: false }];
+  },
   webpack: (config) => {
     // @huggingface/transformers ships a node build and a web build.
     // Its "node" export pulls native binaries and bare .wasm
