@@ -98,8 +98,24 @@ export interface Mp4ExportResult {
   audioIncluded: boolean;
 }
 
+/** Storyboard aspect ratios and their full export pixel sizes. Pure. */
+export type AspectRatio = "16:9" | "9:16" | "1:1";
+
+export function aspectRatioToSize(aspect: AspectRatio): { width: number; height: number } {
+  switch (aspect) {
+    case "9:16":
+      return { width: 1080, height: 1920 };
+    case "1:1":
+      return { width: 1080, height: 1080 };
+    case "16:9":
+    default:
+      return { width: 1920, height: 1080 };
+  }
+}
+
 /**
- * Encode a storyboard to an MP4 blob (1080p, 16:9, 30 fps timebase).
+ * Encode a storyboard to an MP4 blob (default 1920×1080, 16:9, 30 fps
+ * timebase; pass opts.size for 9:16 or 1:1).
  * One keyframe per shot, held for the shot's duration. When
  * `audio` is given (the full narration timeline, same total length
  * as the video — silence included for title cards), it is encoded
@@ -113,6 +129,8 @@ export async function exportStoryboardMp4(
   opts: {
     width?: number;
     height?: number;
+    /** Full export size; wins over width/height when given. Default 1920×1080 (16:9). */
+    size?: { width: number; height: number };
     /** Full narration timeline PCM (mono). Total length must equal the video length. */
     audio?: { samples: Float32Array; sampleRate: number };
     onProgress?: (p: Mp4Progress) => void;
@@ -125,8 +143,8 @@ export async function exportStoryboardMp4(
     );
   }
   if (board.shots.length === 0) throw new Error("There are no shots to export.");
-  const width = opts.width ?? 1920;
-  const height = opts.height ?? 1080;
+  const width = opts.size?.width ?? opts.width ?? 1920;
+  const height = opts.size?.height ?? opts.height ?? 1080;
   const frames = planMp4Frames(board);
   const codec = await pickAvcCodec(width, height);
   const target = new ArrayBufferTarget();

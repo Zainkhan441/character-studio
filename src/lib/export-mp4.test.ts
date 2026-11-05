@@ -9,7 +9,7 @@
 import { describe, expect, it } from "vitest";
 import { ArrayBufferTarget, Muxer } from "mp4-muxer";
 import { buildStoryboard } from "./story";
-import { planMp4Frames } from "./export-mp4";
+import { aspectRatioToSize, planMp4Frames } from "./export-mp4";
 import { renderThumbnailSvg, splitTitle, THUMBNAIL_VARIANTS, THUMBNAIL_YELLOW } from "./thumbnail";
 import { starterCast } from "./cast";
 
@@ -132,5 +132,19 @@ describe("renderThumbnailSvg", () => {
       }),
     );
     expect(new Set(svgs).size).toBe(3);
+  });
+});
+
+describe("aspectRatioToSize", () => {
+  it("maps 16:9 to 1920×1080", () => {
+    expect(aspectRatioToSize("16:9")).toEqual({ width: 1920, height: 1080 });
+  });
+
+  it("maps 9:16 to 1080×1920 (vertical)", () => {
+    expect(aspectRatioToSize("9:16")).toEqual({ width: 1080, height: 1920 });
+  });
+
+  it("maps 1:1 to 1080×1080 (square)", () => {
+    expect(aspectRatioToSize("1:1")).toEqual({ width: 1080, height: 1080 });
   });
 });

@@ -25,6 +25,7 @@
     "build": "next build",
     "dev": "next dev",
     "lint": "next lint",
+    "prebuild": "npm test",
     "start": "next start",
     "test": "vitest run",
     "test:watch": "vitest"

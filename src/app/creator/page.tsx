@@ -30,6 +30,7 @@
  *   corrupt data falls back to the default character with a warning.
  */
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import AppShell from "@/components/AppShell";
 import {
   CREATOR_EXPRESSIONS,
   CREATOR_POSES,
@@ -54,7 +55,7 @@ import {
   type PoseName,
   type PropName,
 } from "@/lib/character";
-import { loadCast, saveCast, upsertCast } from "@/lib/cast";
+import { loadCast, saveCast, starterCast, upsertCast } from "@/lib/cast";
 import {
   loadCustomPoses,
   removeCustomPose,
@@ -70,11 +71,15 @@ import {
   computeSkeleton,
   jointsToCharacterSpace,
   limbAnglesForPoint,
+  renderCharacterSvg,
   renderCharacterTimed,
 } from "@/lib/renderer";
 
 const STORAGE_KEY = "character-studio:creator:character:v1";
 const DEFAULT_VIEWBOX = "-4.5 -9.5 9 10.5";
+/** Shared pose-matrix frame (from the old /poses page): union of all
+ * 21 pose bounds + margin, so every thumbnail uses the same frame. */
+const CARD_VIEWBOX = "-3.8 -5.8 6.5 6.4";
 
 const PREVIEW_BG_LIGHT = "#f5f3ef";
 const PREVIEW_BG_DARK = "#171412";
@@ -107,7 +112,14 @@ export default function CreatorPage() {
   const [renderError, setRenderError] = useState<string | null>(null);
   const [dark, setDark] = useState(false);
   const [savedAt, setSavedAt] = useState<string | null>(null);
+  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "offline">("saved");
+  const [online, setOnline] = useState(true);
   const [poseEdit, setPoseEdit] = useState(false);
+  const [showPoses, setShowPoses] = useState(true);
+  const [zoom, setZoom] = useState(1);
+  // Debounced snapshot for the pose-matrix strip: re-rendering 21
+  // thumbnails on every slider frame would jank the drag.
+  const [thumbChar, setThumbChar] = useState<Character>(() => defaultCharacter());
   const [dragging, setDragging] = useState(false);
   const [histState, setHistState] = useState({ canUndo: false, canRedo: false });
   const [customPoses, setCustomPoses] = useState<CustomPose[]>([]);
@@ -158,11 +170,13 @@ export default function CreatorPage() {
   // Autosave (debounced 300ms) on every change after mount.
   useEffect(() => {
     if (!mounted) return;
+    setSaveStatus(online ? "saving" : "offline");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       try {
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(character));
         setSavedAt(new Date().toLocaleTimeString());
+        setSaveStatus(navigator.onLine ? "saved" : "offline");
       } catch (err) {
         const message = err instanceof Error ? err.message : "unknown error";
         setNotice(`Autosave failed (${message}). Your changes are still on screen.`);
@@ -171,6 +185,32 @@ export default function CreatorPage() {
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
+  }, [character, mounted, online]);
+
+  // Online/offline indicator for the autosave status.
+  useEffect(() => {
+    const goOnline = () => {
+      setOnline(true);
+      setSaveStatus("saved");
+    };
+    const goOffline = () => {
+      setOnline(false);
+      setSaveStatus("offline");
+    };
+    setOnline(navigator.onLine);
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => {
+      window.removeEventListener("online", goOnline);
+      window.removeEventListener("offline", goOffline);
+    };
+  }, []);
+
+  // Debounced snapshot for the pose-matrix strip.
+  useEffect(() => {
+    if (!mounted) return;
+    const t = setTimeout(() => setThumbChar(character), 250);
+    return () => clearTimeout(t);
   }, [character, mounted]);
 
   /** Record a discrete change in history and apply it. */
@@ -217,6 +257,7 @@ export default function CreatorPage() {
   }, [refreshHistState]);
 
   // Keyboard shortcuts: Ctrl/Cmd+Z undo, Ctrl/Cmd+Shift+Z / Ctrl/Cmd+Y redo, Esc exits the pose editor.
+  // Ctrl/Cmd+D duplicates the character into the cast; + / - zoom the canvas, 0 resets zoom.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
@@ -233,6 +274,22 @@ export default function CreatorPage() {
         } else if ((e.key === "Z" && e.shiftKey) || e.key === "y" || e.key === "Y") {
           e.preventDefault();
           redo();
+        } else if (e.key === "d" || e.key === "D") {
+          e.preventDefault();
+          duplicateCharacter();
+        }
+        return;
+      }
+      if (!inField && !e.ctrlKey && !e.metaKey && !e.altKey) {
+        if (e.key === "+" || e.key === "=") {
+          e.preventDefault();
+          setZoom((z) => Math.min(2, Math.round((z + 0.25) * 100) / 100));
+        } else if (e.key === "-") {
+          e.preventDefault();
+          setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100));
+        } else if (e.key === "0") {
+          e.preventDefault();
+          setZoom(1);
         }
       }
     };
@@ -446,7 +503,7 @@ export default function CreatorPage() {
         outfit: { ...c.outfit, outfit: pack.outfit, hat: pack.hat },
         hair: { ...c.hair, style: pack.hairStyle },
       });
-      setNotice(`Dressed for the ${pack.name} era.`);
+      setNotice(`Wardrobe preset applied: ${pack.name}.`);
     },
     [commit],
   );
@@ -468,6 +525,48 @@ export default function CreatorPage() {
     saveCast(upsertCast(cast, c));
     setNotice(`${c.name} saved to your cast.`);
   }, []);
+
+  /** Duplicate the current character into the cast (Ctrl/Cmd+D). */
+  const duplicateCharacter = useCallback(() => {
+    const c = characterRef.current;
+    const copy: Character = {
+      ...c,
+      id: `char-${Date.now()}`,
+      name: `${c.name} (copy)`,
+    };
+    const { cast } = loadCast();
+    saveCast(upsertCast(cast, copy));
+    setNotice(`Duplicated ${c.name} into your cast as "${copy.name}".`);
+  }, []);
+
+  /** Load a starter preset into the creator (keeps the preset's id,
+   * so Save to cast updates that cast member). */
+  const presets = useMemo(() => starterCast(), []);
+  const applyPreset = useCallback(
+    (preset: Character) => {
+      commit({ ...preset });
+      setNotice(`Loaded preset "${preset.name}" — edit it, then Save to cast to keep it.`);
+    },
+    [commit],
+  );
+
+  /** Pose-matrix strip thumbnails (the old /poses page, now a panel
+   * in the Creator): this character in all 21 poses. Rendered from
+   * the debounced snapshot so slider drags stay smooth. */
+  const poseThumbs = useMemo(() => {
+    if (!mounted || !showPoses) return [];
+    return POSE_NAMES.map((pose) => {
+      try {
+        const svg = renderCharacterSvg(
+          { ...thumbChar, pose: pose as PoseName },
+          { viewBox: CARD_VIEWBOX, background: "#f5f3ef" },
+        );
+        return { pose: pose as PoseName, svg };
+      } catch {
+        return { pose: pose as PoseName, svg: "" };
+      }
+    });
+  }, [mounted, showPoses, thumbChar]);
 
   const downloadSvg = useCallback(() => {
     if (!previewSvg) return;
@@ -527,27 +626,23 @@ export default function CreatorPage() {
       ]
     : [];
 
+  const saveLabel =
+    saveStatus === "offline"
+      ? "● Offline — saved on this device"
+      : saveStatus === "saving"
+        ? "● Saving…"
+        : savedAt
+          ? `● Saved ${savedAt}`
+          : "● Autosave on";
+
   return (
-    <main className="flex h-dvh flex-col overflow-hidden bg-white text-neutral-900">
-      {/* Top bar */}
-      <header className="flex shrink-0 items-center justify-between gap-2 border-b border-neutral-200 px-4 py-3 sm:px-6">
-        <div className="flex items-center gap-3">
-          <a href="/" className="text-lg font-bold tracking-tight">
-            Character Studio
-          </a>
-          <span className="hidden rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 sm:inline">
-            Creator
-          </span>
-          <a href="/cast" className="hidden rounded-full bg-neutral-100 px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-200 sm:inline">
-            Cast →
-          </a>
-          <a href="/import" className="hidden rounded-full bg-neutral-100 px-2 py-0.5 text-xs font-medium text-neutral-700 hover:bg-neutral-200 sm:inline" title="Upload a cartoon picture and extract a character from it">
-            ＋ Add your own character
-          </a>
-        </div>
-        <div className="flex items-center gap-2">
+    <AppShell
+      active="workspace"
+      className="h-dvh overflow-hidden"
+      actions={
+        <>
           <span className="hidden text-xs text-neutral-500 md:inline" title="Autosave status">
-            {savedAt ? `Autosaved ${savedAt}` : "Autosave on"}
+            {saveLabel}
           </span>
           <button
             type="button"
@@ -578,6 +673,34 @@ export default function CreatorPage() {
           </button>
           <button
             type="button"
+            onClick={() => setShowPoses((v) => !v)}
+            aria-pressed={showPoses}
+            title="Show all 21 poses as a strip under the canvas"
+            className={`rounded-md border px-3 py-1.5 text-sm ${showPoses ? "border-neutral-900 bg-neutral-900 text-white" : "border-neutral-300 hover:bg-neutral-100"}`}
+          >
+            ▦ Poses
+          </button>
+          <span className="hidden items-center gap-1 md:flex" title="Canvas zoom (+ / −, 0 to reset)">
+            <button
+              type="button"
+              onClick={() => setZoom((z) => Math.max(0.5, Math.round((z - 0.25) * 100) / 100))}
+              aria-label="Zoom out"
+              className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm hover:bg-neutral-100"
+            >
+              −
+            </button>
+            <span className="w-11 text-center text-xs text-neutral-600">{Math.round(zoom * 100)}%</span>
+            <button
+              type="button"
+              onClick={() => setZoom((z) => Math.min(2, Math.round((z + 0.25) * 100) / 100))}
+              aria-label="Zoom in"
+              className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm hover:bg-neutral-100"
+            >
+              +
+            </button>
+          </span>
+          <button
+            type="button"
             onClick={() => setDark((d) => !d)}
             className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100"
             aria-label={dark ? "Switch to light preview" : "Switch to dark preview"}
@@ -592,9 +715,10 @@ export default function CreatorPage() {
           >
             Download SVG
           </button>
-        </div>
-      </header>
-
+        </>
+      }
+    >
+      <div className="flex h-full min-h-0 flex-col">
       {notice && (
         <div className="flex shrink-0 items-center justify-between border-b border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800 sm:px-6">
           <span>{notice}</span>
@@ -625,7 +749,10 @@ export default function CreatorPage() {
               </button>
             </div>
           ) : render.svg ? (
-            <div className="relative h-full w-full">
+            <div
+              className="relative min-h-0 w-full flex-1"
+              style={{ transform: `scale(${zoom})`, transformOrigin: "center center" }}
+            >
               <div
                 ref={previewRef}
                 className="absolute inset-0 [&_svg]:h-full [&_svg]:w-full"
@@ -663,11 +790,42 @@ export default function CreatorPage() {
           ) : (
             <p className="text-sm text-neutral-500">No preview yet.</p>
           )}
-          <p className={`absolute bottom-2 left-3 z-10 text-xs ${overBudget ? "font-semibold text-red-600" : "text-neutral-500"}`}>
-            Rendered in {render.ms.toFixed(2)} ms (budget &lt; 16 ms)
-            {overBudget ? " — over budget, investigate before shipping" : ""}
-            {" · "}Pose: {character.pose} · {character.face.expression}
-          </p>
+          {/* Pose-matrix strip (the old /poses page, now a panel in the
+              Creator): this character in all 21 poses. Click to apply. */}
+          <div className="relative z-10 w-full shrink-0 border-t border-neutral-200 bg-white">
+            <div className="flex items-center gap-2 overflow-x-auto p-2">
+              <div className="w-32 shrink-0 text-xs leading-snug text-neutral-500">
+                <p className={overBudget ? "font-semibold text-red-600" : ""}>
+                  Rendered in {render.ms.toFixed(2)} ms (budget &lt; 16 ms)
+                  {overBudget ? " — over budget" : ""}
+                </p>
+                <p>
+                  Pose: {character.pose} · {character.face.expression}
+                </p>
+                <p>Zoom {Math.round(zoom * 100)}% (+ / − keys)</p>
+              </div>
+              {showPoses &&
+                poseThumbs.map(({ pose, svg }) => (
+                  <button
+                    key={pose}
+                    type="button"
+                    onClick={() => setPose(pose)}
+                    title={`Apply pose: ${pose}`}
+                    className={`h-24 w-16 shrink-0 overflow-hidden rounded-lg border ${
+                      character.pose === pose
+                        ? "border-neutral-900 ring-1 ring-neutral-900"
+                        : "border-neutral-200 hover:border-neutral-400"
+                    }`}
+                  >
+                    <div
+                      className="h-20 bg-[#f5f3ef] [&_svg]:mx-auto [&_svg]:block [&_svg]:h-full [&_svg]:w-auto"
+                      dangerouslySetInnerHTML={{ __html: svg }}
+                    />
+                    <span className="block truncate px-1 py-0.5 text-center text-[10px] capitalize">{pose}</span>
+                  </button>
+                ))}
+            </div>
+          </div>
         </section>
 
         {/* Controls — right edge */}
@@ -683,6 +841,37 @@ export default function CreatorPage() {
             maxLength={60}
             className="mt-1 w-full rounded-md border border-neutral-300 px-3 py-2 text-sm focus:border-neutral-900 focus:outline-none"
           />
+
+          <ControlGroup title="Character presets">
+            <div className="grid grid-cols-3 gap-2">
+              {presets.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => applyPreset(p)}
+                  title={`Load preset ${p.name}`}
+                  className={`rounded-md border px-2 py-1.5 text-sm capitalize ${
+                    character.id === p.id
+                      ? "border-neutral-900 bg-neutral-900 text-white"
+                      : "border-neutral-300 hover:bg-neutral-100"
+                  }`}
+                >
+                  {p.name}
+                </button>
+              ))}
+              <button
+                type="button"
+                onClick={reset}
+                title="Back to the default character"
+                className="rounded-md border border-neutral-300 px-2 py-1.5 text-sm hover:bg-neutral-100"
+              >
+                Default
+              </button>
+            </div>
+            <p className="mt-2 text-xs leading-relaxed text-neutral-400">
+              Start from a ready character, then make it yours. Save to cast to keep your version.
+            </p>
+          </ControlGroup>
 
           <ControlGroup title="Pose">
             <div className="grid grid-cols-3 gap-2">
@@ -867,7 +1056,7 @@ export default function CreatorPage() {
           </ControlGroup>
 
           <ControlGroup title="Wardrobe">
-            <p className="mb-2 text-xs text-neutral-500">Era packs — one click dresses the character:</p>
+            <p className="mb-2 text-xs text-neutral-500">Wardrobe presets — one click dresses the character:</p>
             <div className="mb-3 grid grid-cols-3 gap-2">
               {ERA_PACKS.map((pack) => (
                 <button
@@ -1079,7 +1268,8 @@ export default function CreatorPage() {
           </p>
         </aside>
       </div>
-    </main>
+      </div>
+    </AppShell>
   );
 }
 

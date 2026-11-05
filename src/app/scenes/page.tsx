@@ -14,6 +14,7 @@
  * live in localStorage (Supabase later — no auth/billing in MVP).
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import AppShell from "@/components/AppShell";
 import {
   BACKGROUND_IDS,
   BACKGROUND_NAMES,
@@ -52,6 +53,26 @@ function uid(prefix: string): string {
   return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
+/** Aspect ratios for the still (also what the story export uses). */
+type Aspect = "16:9" | "9:16" | "1:1";
+const ASPECT_SIZES: Record<Aspect, { width: number; height: number }> = {
+  "16:9": { width: 1280, height: 720 },
+  "9:16": { width: 720, height: 1280 },
+  "1:1": { width: 720, height: 720 },
+};
+
+/** One-click scene presets (background + time + lighting + camera). */
+const SCENE_PRESETS: Array<{
+  id: string;
+  name: string;
+  patch: { background: BackgroundId; variant: Variant; lighting: LightingKind; camera: CameraKind; cutaway: null };
+}> = [
+  { id: "campfire", name: "Night campfire", patch: { background: "hut", variant: "night", lighting: "fire", camera: "medium", cutaway: null } },
+  { id: "village", name: "Day village", patch: { background: "village", variant: "day", lighting: "none", camera: "wide", cutaway: null } },
+  { id: "snow", name: "Snowy hunt", patch: { background: "snow", variant: "dusk", lighting: "night", camera: "wide", cutaway: null } },
+  { id: "cave", name: "Cave story", patch: { background: "cave", variant: "night", lighting: "fire", camera: "closeup", cutaway: null } },
+];
+
 export default function ScenesPage() {
   const [mounted, setMounted] = useState(false);
   const [scene, setScene] = useState<Scene>(() => defaultScene());
@@ -67,6 +88,10 @@ export default function ScenesPage() {
   const [newAnimal, setNewAnimal] = useState<AnimalSpecies>("cow");
   const [labelText, setLabelText] = useState("Look here");
   const [copied, setCopied] = useState(false);
+  const [aspect, setAspect] = useState<Aspect>("16:9");
+  const [saveStatus, setSaveStatus] = useState<"saved" | "saving" | "offline">("saved");
+  const [online, setOnline] = useState(true);
+  const [savedAt, setSavedAt] = useState<string | null>(null);
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const historyRef = useRef<History<Scene> | null>(null);
   const sceneRef = useRef<Scene>(scene);
@@ -96,14 +121,36 @@ export default function ScenesPage() {
   // Autosave the draft (debounced) on every change.
   useEffect(() => {
     if (!mounted) return;
+    setSaveStatus(online ? "saving" : "offline");
     if (saveTimer.current) clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(() => {
       saveDraft(sceneRef.current);
+      setSavedAt(new Date().toLocaleTimeString());
+      setSaveStatus(navigator.onLine ? "saved" : "offline");
     }, 400);
     return () => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
     };
-  }, [scene, mounted]);
+  }, [scene, mounted, online]);
+
+  // Online/offline indicator for the autosave status.
+  useEffect(() => {
+    const goOnline = () => {
+      setOnline(true);
+      setSaveStatus("saved");
+    };
+    const goOffline = () => {
+      setOnline(false);
+      setSaveStatus("offline");
+    };
+    setOnline(navigator.onLine);
+    window.addEventListener("online", goOnline);
+    window.addEventListener("offline", goOffline);
+    return () => {
+      window.removeEventListener("online", goOnline);
+      window.removeEventListener("offline", goOffline);
+    };
+  }, []);
 
   const commit = useCallback(
     (next: Scene) => {
@@ -162,7 +209,7 @@ export default function ScenesPage() {
 
   const rendered = useMemo(() => {
     try {
-      const r = renderScene(scene, castMap);
+      const r = renderScene(scene, castMap, ASPECT_SIZES[aspect]);
       setRenderError(null);
       return r;
     } catch (err) {
@@ -170,7 +217,15 @@ export default function ScenesPage() {
       setRenderError(message);
       return { svg: "", warnings: [] as string[], ms: 0 };
     }
-  }, [scene, castMap]);
+  }, [scene, castMap, aspect]);
+
+  const applyPreset = useCallback(
+    (preset: (typeof SCENE_PRESETS)[number]) => {
+      update(preset.patch);
+      setNotice(`Scene preset applied: ${preset.name}.`);
+    },
+    [update],
+  );
 
   const downloadSvg = () => {
     const blob = new Blob([rendered.svg], { type: "image/svg+xml" });
@@ -260,6 +315,15 @@ export default function ScenesPage() {
     });
   };
 
+  const saveLabel =
+    saveStatus === "offline"
+      ? "● Offline — saved on this device"
+      : saveStatus === "saving"
+        ? "● Saving…"
+        : savedAt
+          ? `● Saved ${savedAt}`
+          : "● Autosave on";
+
   if (!mounted) {
     return (
       <main className="flex min-h-screen items-center justify-center bg-white text-neutral-500">
@@ -269,17 +333,20 @@ export default function ScenesPage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col bg-white text-neutral-900">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 px-4 py-3 sm:px-6">
-        <span className="text-lg font-bold tracking-tight">Character Studio · Scenes</span>
-        <nav className="flex flex-wrap items-center gap-2">
-          <a href="/" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">Home</a>
-          <a href="/cast" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">Cast</a>
-          <a href="/poses" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">Poses</a>
-          <a href="/creator" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">Creator</a>
-          <a href="/story" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-700">Script → Video</a>
-        </nav>
-      </header>
+    <AppShell
+      active="scenes"
+      actions={
+        <>
+          <span className="hidden text-xs text-neutral-500 md:inline" title="Autosave status">
+            {saveLabel}
+          </span>
+          <button type="button" onClick={undo} disabled={!histState.canUndo} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-40">↩ Undo</button>
+          <button type="button" onClick={redo} disabled={!histState.canRedo} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-40">↪ Redo</button>
+          <button type="button" onClick={downloadSvg} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">Download SVG</button>
+          <button type="button" onClick={copyJson} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">{copied ? "Copied ✓" : "Copy JSON"}</button>
+        </>
+      }
+    >
 
       {notice && (
         <div className="mx-4 mt-3 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900 sm:mx-6">
@@ -304,11 +371,19 @@ export default function ScenesPage() {
                 {` · ${CAMERA_NAMES[scene.camera]} · ${LIGHTING_NAMES[scene.lighting]}`}
               </span>
             </h1>
-            <div className="flex items-center gap-2">
-              <button type="button" onClick={undo} disabled={!histState.canUndo} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-40">↩ Undo</button>
-              <button type="button" onClick={redo} disabled={!histState.canRedo} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm disabled:opacity-40">↪ Redo</button>
-              <button type="button" onClick={downloadSvg} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">Download SVG</button>
-              <button type="button" onClick={copyJson} className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">{copied ? "Copied ✓" : "Copy JSON"}</button>
+            <div className="flex items-center gap-2" role="group" aria-label="Aspect ratio">
+              {(["16:9", "9:16", "1:1"] as Aspect[]).map((a) => (
+                <button
+                  key={a}
+                  type="button"
+                  onClick={() => setAspect(a)}
+                  aria-pressed={aspect === a}
+                  title={a === "16:9" ? "Widescreen video" : a === "9:16" ? "Vertical Short / Reel" : "Square post"}
+                  className={`rounded-md border px-3 py-1.5 text-sm ${aspect === a ? "border-neutral-900 bg-neutral-900 text-white" : "border-neutral-300 hover:bg-neutral-100"}`}
+                >
+                  {a}
+                </button>
+              ))}
             </div>
           </div>
 
@@ -322,7 +397,7 @@ export default function ScenesPage() {
             </div>
           )}
           <p className="mt-2 text-xs text-neutral-500">
-            Rendered in {rendered.ms.toFixed(2)} ms (thumbnail budget &lt;100 ms) · 16:9 still — one shot in your video, held ~2.3 s.
+            Rendered in {rendered.ms.toFixed(2)} ms (thumbnail budget &lt;100 ms) · {aspect} still — one shot in your video, held ~2.3 s.
             {rendered.warnings.length > 0 && (
               <span className="text-amber-700"> Warnings: {rendered.warnings.join(" ")}</span>
             )}
@@ -373,6 +448,25 @@ export default function ScenesPage() {
 
         {/* Controls */}
         <aside className="w-full shrink-0 space-y-5 lg:w-80">
+          <section className="rounded-xl border border-neutral-200 p-4">
+            <h2 className="text-sm font-semibold">Scene presets</h2>
+            <p className="mt-1 text-xs leading-relaxed text-neutral-500">
+              One click sets background, time of day, lighting and camera.
+            </p>
+            <div className="mt-2 grid grid-cols-2 gap-2">
+              {SCENE_PRESETS.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() => applyPreset(p)}
+                  className="rounded-md border border-neutral-300 px-2 py-1.5 text-xs hover:bg-neutral-100"
+                >
+                  {p.name}
+                </button>
+              ))}
+            </div>
+          </section>
+
           <section className="rounded-xl border border-neutral-200 p-4">
             <h2 className="text-sm font-semibold">Background</h2>
             <div className="mt-2 grid grid-cols-3 gap-2">
@@ -671,6 +765,6 @@ export default function ScenesPage() {
           </section>
         </aside>
       </div>
-    </main>
+    </AppShell>
   );
 }

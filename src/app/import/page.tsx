@@ -16,6 +16,7 @@
  * The image never leaves the browser.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
+import AppShell from "@/components/AppShell";
 import {
   defaultCharacter,
   validateCharacter,
@@ -421,16 +422,7 @@ export default function ImportPage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col bg-white text-neutral-900">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 px-4 py-3 sm:px-6">
-        <span className="text-lg font-bold tracking-tight">Character Studio · Add your own character</span>
-        <nav className="flex flex-wrap items-center gap-2">
-          <a href="/" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">Home</a>
-          <a href="/cast" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">Cast</a>
-          <a href="/creator" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-700">Creator</a>
-        </nav>
-      </header>
-
+    <AppShell active="characters">
       <div className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 sm:px-6">
         <p className="text-sm text-neutral-600">
           Upload any cartoon picture — the tool extracts the character, you correct it in about two minutes, and it
@@ -736,6 +728,6 @@ export default function ImportPage() {
           </section>
         )}
       </div>
-    </main>
+    </AppShell>
   );
 }

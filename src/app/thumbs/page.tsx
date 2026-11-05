@@ -10,6 +10,7 @@
  * for a shot.
  */
 import { useEffect, useMemo, useState } from "react";
+import AppShell from "@/components/AppShell";
 import { loadCast } from "@/lib/cast";
 import {
   FACE_NAMES,
@@ -90,17 +91,7 @@ export default function ThumbsPage() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col bg-white text-neutral-900">
-      <header className="flex flex-wrap items-center justify-between gap-2 border-b border-neutral-200 px-4 py-3 sm:px-6">
-        <span className="text-lg font-bold tracking-tight">Character Studio · Thumbnail maker</span>
-        <nav className="flex flex-wrap items-center gap-2">
-          <a href="/" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">Home</a>
-          <a href="/cast" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">Cast</a>
-          <a href="/story" className="rounded-md border border-neutral-300 px-3 py-1.5 text-sm hover:bg-neutral-100">Script → Video</a>
-          <a href="/creator" className="rounded-md bg-neutral-900 px-3 py-1.5 text-sm text-white hover:bg-neutral-700">Creator</a>
-        </nav>
-      </header>
-
+    <AppShell active="assets">
       <div className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 sm:px-6">
         {error && (
           <div className="mb-4 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-900">{error}</div>
@@ -222,6 +213,6 @@ export default function ThumbsPage() {
           </div>
         </div>
       </div>
-    </main>
+    </AppShell>
   );
 }

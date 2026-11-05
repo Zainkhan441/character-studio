@@ -16,8 +16,17 @@ import {
   type Character,
 } from "./character";
 import { makeChild, makeElder, makeFemale } from "./family";
+import {
+  loadVersions,
+  recordOverwrite,
+  saveVersions,
+  type VersionStore,
+} from "./versions";
 
 export const CAST_STORAGE_KEY = "character-studio:cast:v1";
+
+/** Archived character ids — kept separate from the Character schema. */
+export const ARCHIVED_STORAGE_KEY = "character-studio-archived-v1";
 
 /** Build the 5 starter characters. Pure — safe to call anywhere. */
 export function starterCast(): Character[] {
@@ -125,12 +134,61 @@ export function saveCast(cast: Character[]): boolean {
   }
 }
 
-/** Add a character to the cast (replaces any entry with the same id). */
+/** Add a character to the cast (replaces any entry with the same id).
+ * When an existing character is overwritten with different content,
+ * the OLD version is snapshotted into the version store first, so a
+ * bad edit can be restored. New characters and identical overwrites
+ * record no version. */
 export function upsertCast(cast: Character[], c: Character): Character[] {
+  const existing = cast.find((x) => x.id === c.id);
+  if (existing && JSON.stringify(existing) !== JSON.stringify(c)) {
+    const store: VersionStore = recordOverwrite(loadVersions(), existing, c);
+    saveVersions(store);
+  }
   const rest = cast.filter((x) => x.id !== c.id);
   return [...rest, c];
 }
 
 export function removeFromCast(cast: Character[], id: string): Character[] {
   return cast.filter((x) => x.id !== id);
+}
+
+/* ------------------------------------------------------------------ */
+/* Archived ids — stored separately so the Character schema stays     */
+/* untouched. Archived characters are hidden from the library by      */
+/* default and shown only when the "Show archived" toggle is on.      */
+/* ------------------------------------------------------------------ */
+
+/** Load archived ids. Missing/corrupt storage means none archived. */
+export function loadArchivedIds(): string[] {
+  if (typeof window === "undefined" || !window.localStorage) return [];
+  try {
+    const raw = window.localStorage.getItem(ARCHIVED_STORAGE_KEY);
+    if (raw === null) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter((x): x is string => typeof x === "string");
+  } catch {
+    return [];
+  }
+}
+
+/** Persist archived ids. Returns false when storage is unavailable. */
+export function saveArchivedIds(ids: string[]): boolean {
+  if (typeof window === "undefined" || !window.localStorage) return false;
+  try {
+    window.localStorage.setItem(ARCHIVED_STORAGE_KEY, JSON.stringify(ids));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Pure list ops for the archived-id set. */
+export function archiveId(ids: string[], id: string): string[] {
+  return ids.includes(id) ? ids : [...ids, id];
+}
+
+export function unarchiveId(ids: string[], id: string): string[] {
+  return ids.filter((x) => x !== id);
 }
